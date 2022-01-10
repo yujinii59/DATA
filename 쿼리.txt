@@ -1,0 +1,16 @@
+- 세로로 나오는 결과 값 ','로 묶어서 하나의 값으로 만드는 함수
+SELECT STRING_AGG(T1.ATTR03_VAL,',') WITHIN GROUP(ORDER BY T1.ATTR03_VAL) AS SP2_CD
+FROM (
+        SELECT ATTR03_VAL
+          FROM M4S_I002011
+         WHERE 1=1
+           AND PROJECT_CD = @:VS_P_PROJECT_CD
+           AND COMM_CD = 'ITEM_GUBUN02'
+           AND USE_YN = 'Y'
+           AND COMM_DTL_CD IN (@:VS_CB_LINE_CD)
+           AND ATTR03_VAL IS NOT NULL
+    ) T1
+	
+- 
+	
+	
