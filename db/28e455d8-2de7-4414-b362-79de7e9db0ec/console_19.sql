@@ -1,0 +1,656 @@
+exec PRC_DF_NPI_UPGRADE 0, 'ENT001','20180102-20210103','SELL_IN', 'UPGRADE','5141085', '5141087',70,50,'dev07'
+
+exec PRC_DF_NPI_REVISION 0, 'ENT001',
+    '20180102-20210103','SELL_IN',
+    'REVISION','5141085', '5141087',70,'dev07'
+
+
+begin
+	declare @O int
+	declare @V_PROJECT_CD varchar(50) = 'ENT001'
+	declare @V_DATA_VRSN_CD varchar(50) = '20201102-20211031'
+	declare @V_DIVISION_CD varchar(50) = 'SELL_IN'
+	declare @V_CLASSIFY_CD varchar(50) = 'REVISION'
+	declare @V_ITEM_CD varchar(50) = '5141085'
+	declare @V_SIM_ITEM_CD varchar(50) = '5141087'
+	declare @V_RATE INT = 70
+	declare @V_MODIFY_USER_CD varchar(100) = 'dev07'
+	declare @result int
+	exec
+		@result = PRC_DF_NPI_REVISION
+			@O output,
+			@V_PROJECT_CD,
+			@V_DATA_VRSN_CD,
+			@V_DIVISION_CD,
+			@V_CLASSIFY_CD,
+			@V_ITEM_CD,
+			@V_SIM_ITEM_CD,
+			@V_RATE,
+			@V_MODIFY_USER_CD
+
+	select @O
+
+	select @result as result
+end
+
+
+/**********************************
+  작성자  	: 박은진
+  작성일자 	: 2021.10.8
+  [TABLE]
+ M4S_I110410 -- 수요예측 모델 정확도
+ M4S_I103010 -- 알고리즘 관리
+***********************************/
+
+WITH SCORE
+AS (
+        SELECT PROJECT_CD
+             , DATA_VRSN_CD
+             , DIVISION_CD
+			 , ITEM_ATTR01_CD
+             , ITEM_ATTR01_NM
+			 , ITEM_ATTR02_CD
+             , ITEM_ATTR02_NM
+			 , ITEM_ATTR03_CD
+             , ITEM_ATTR03_NM
+			 , ITEM_ATTR04_CD
+             , ITEM_ATTR04_NM
+			 , ITEM_CD
+             , ITEM_NM
+			 , CUST_GRP_CD
+             , CUST_GRP_NM
+			 , FKEY
+             , LEVEL
+             , CASE
+                   WHEN LEVEL = 'BRAND' THEN ITEM_ATTR03_CD
+                   WHEN LEVEL = 'ITEM' THEN ITEM_ATTR04_CD
+                   ELSE ITEM_CD
+            END AS LEVEL_CD
+             , STAT_CD
+             , RMSE
+        FROM (
+                 SELECT PROJECT_CD
+                      , DATA_VRSN_CD
+                      , DIVISION_CD
+                      , ITEM_ATTR01_CD
+                      , ITEM_ATTR01_NM
+                      , ITEM_ATTR02_CD
+                      , ITEM_ATTR02_NM
+                      , ITEM_ATTR03_CD
+                      , ITEM_ATTR03_NM
+                      , ITEM_ATTR04_CD
+                      , ITEM_ATTR04_NM
+                      , ITEM_CD
+                      , ITEM_NM
+                      , CUST_GRP_CD
+                      , CUST_GRP_NM
+                      , FKEY
+                      , CASE
+                            WHEN FKEY LIKE '%C1-P3%' THEN 'BRAND'
+                            WHEN FKEY LIKE '%C1-P4%' THEN 'ITEM'
+                            WHEN FKEY LIKE '%C1-P5%' THEN 'SKU'
+                     END AS LEVEL
+                      , STAT_CD
+                      , RMSE
+                 FROM M4S_I110410
+				 WHERE 1 = 1
+				   AND DATA_VRSN_CD = '20201102-20211031'
+				   AND DIVISION_CD = 'SELL_IN'
+				   AND ITEM_ATTR01_CD = 'P1'
+				   --AND ITEM_ATTR04_CD IN (@:VS_CB_ITEM)
+				   AND FKEY LIKE '%' + 'C1-P3' + '%'
+             ) SCORE
+)
+SELECT PROJECT_CD
+     , DATA_VRSN_CD
+	 , DIVISION_CD
+	 , ITEM_ATTR01_NM
+	 , ITEM_ATTR02_NM
+	 , ITEM_ATTR03_NM
+     , ITEM_ATTR04_NM
+	 , ITEM_NM
+	 , SCORE.CUST_GRP_CD
+	 , CUST_GRP_NM
+     , SCORE.STAT_CD
+     , CASE WHEN RANK.STAT_CD IS NULL THEN '' ELSE 'M' END AS MIN_STAT
+	 , STAT_NM
+	 , FKEY
+     , LEVEL
+     , RMSE
+FROM SCORE
+LEFT OUTER JOIN ( --알고리즘명 추출
+               SELECT STAT_CD
+                    , STAT_NM
+                 FROM M4S_I103010
+                WHERE 1=1
+                  AND DIVISION_CD = 'FCST'
+                  AND USE_YN = 'Y'
+              ) ALGO
+ON SCORE.STAT_CD = ALGO.STAT_CD
+LEFT OUTER JOIN (
+                SELECT LEVEL_CD
+                    , CUST_GRP_CD
+					, STAT_CD
+                FROM (
+                    SELECT LEVEL_CD
+                            , CUST_GRP_CD
+							, STAT_CD
+                            , RMSE
+                            , DENSE_RANK() over (PARTITION BY LEVEL_CD, CUST_GRP_CD ORDER BY RMSE) AS RANK
+                       FROM (
+					   		SELECT LEVEL_CD
+					   		    , CUST_GRP_CD
+								, STAT_CD
+								, SUM(RMSE) RMSE
+							FROM SCORE
+							GROUP BY LEVEL_CD
+							    , CUST_GRP_CD
+								, STAT_CD
+					   ) SCORE
+                    ) RANK
+                WHERE 1=1
+                AND RANK = 1
+                ) RANK
+ON  SCORE.LEVEL_CD = RANK.LEVEL_CD
+AND SCORE.CUST_GRP_CD = RANK.CUST_GRP_CD
+AND SCORE.STAT_CD = RANK.STAT_CD
+WHERE SCORE.CUST_GRP_CD = '1175'
+
+SELECT * FROM  M4S_I000011 WHERE TABLE_ID = 'M4S_C210000'
+
+
+SELECT * FROM M4S_C210000
+
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_CATALOG = 'BISCM' AND TABLE_NAME LIKE'M4S_C210000_20211227%'
+
+SELECT * INTO BISCM.dbo.M4S_C210000_20211227_4 FROM BISCM.dbo.M4S_C210000 WHERE 1 = 2
+
+select * from M4S_I103030
+
+    select * from M4S_I002020 where user_cd = 'dt-snop02'
+
+
+
+SELECT * FROM M4S_I002175
+
+SELECT T1.DIVISION_CD
+	, T1.ITEM_ATTR01_CD
+	, T1.ITEM_ATTR01_NM
+	, T1.ITEM_ATTR02_CD
+	, T1.ITEM_ATTR02_NM
+	, T1.ITEM_ATTR03_CD
+	, T1.ITEM_ATTR03_NM
+	, T1.ITEM_ATTR04_CD
+	, T1.ITEM_ATTR04_NM
+	, T1.ITEM_CD
+	, T1.ITEM_NM
+	, T1.CUST_GRP_CD
+	, T1.CUST_GRP_NM
+	, '실적' as GUBUN
+	, '실적' as STAT_CD
+    , '실적' as STAT_NM
+	, T1.WEEK
+	, CAL.YYMMDD
+	, SUBSTRING(CAL.YYMMDD,1,4) AS YY
+	, SUBSTRING(CAL.YYMMDD,1,6) AS YYMM
+	, ISNULL(T1.RST_SALES_QTY,0) AS 실적
+	, :VS_CB_LVL FKEY
+
+SELECT T1.DIVISION_CD
+    , T1.ITEM_ATTR01_CD
+    , T1.ITEM_ATTR01_NM
+    , T1.ITEM_ATTR02_CD
+    , T1.ITEM_ATTR02_NM
+    , T1.ITEM_ATTR03_CD
+    , T1.ITEM_ATTR03_NM
+    , T1.ITEM_ATTR04_CD
+    , T1.ITEM_ATTR04_NM
+    , T1.ITEM_CD
+    , T1.ITEM_NM
+    , T1.CUST_GRP_CD
+    , T1.CUST_GRP_NM
+	, '실적' as GUBUN
+	, '실적' as STAT_CD
+    , '실적' as STAT_NM
+    , T1.WEEK
+    , T1.YYMMDD
+    , T1.YY
+    , T1.YYMM
+    , ISNULL(RST.RST_SALES_QTY, 0) RST_SALES_QTY
+	, :VS_CB_LVL FKEY
+FROM (
+        SELECT T1.DIVISION_CD
+            , T1.ITEM_ATTR01_CD
+            , T1.ITEM_ATTR01_NM
+            , T1.ITEM_ATTR02_CD
+            , T1.ITEM_ATTR02_NM
+            , T1.ITEM_ATTR03_CD
+            , T1.ITEM_ATTR03_NM
+            , T1.ITEM_ATTR04_CD
+            , T1.ITEM_ATTR04_NM
+            , T1.ITEM_CD
+            , T1.ITEM_NM
+            , T1.CUST_GRP_CD
+            , T1.CUST_GRP_NM
+            , CAL.WEEK
+            , CAL.YYMMDD
+            , SUBSTRING(CAL.YYMMDD,1,4) AS YY
+            , SUBSTRING(CAL.YYMMDD,1,6) AS YYMM
+        FROM (
+                SELECT T1.DIVISION_CD
+                    , T1.ITEM_ATTR01_CD
+                    , T1.ITEM_ATTR01_NM
+                    , T1.ITEM_ATTR02_CD
+                    , T1.ITEM_ATTR02_NM
+                    , T1.ITEM_ATTR03_CD
+                    , T1.ITEM_ATTR03_NM
+                    , T1.ITEM_ATTR04_CD
+                    , T1.ITEM_ATTR04_NM
+                    , T1.ITEM_CD
+                    , T1.ITEM_NM
+                    , T1.CUST_GRP_CD
+                    , T1.CUST_GRP_NM
+                FROM M4S_I002175 T1
+                WHERE 1=1
+                  AND T1.PROJECT_CD = :VS_P_PROJECT_CD
+                  AND T1.DIVISION_CD = :VS_CB_DIVISION
+                  AND T1.CUST_GRP_CD = :VS_CB_SP1
+                  AND T1.YYMMDD + T1.WEEK IN (SELECT YY + WEEK YY_W
+                                                FROM M4S_I002030
+                                                WHERE 1=1
+                                                  AND PROJECT_CD = 'ENT001'
+                                                  AND YYMMDD BETWEEN LEFT(:VS_CB_DATA_VRSN, 8) AND RIGHT(:VS_CB_DATA_VRSN, 8)
+                                                  AND YYMMDD = START_WEEK_DAY)
+        --           AND T1.ITEM_ATTR01_CD IN (@:VS_CB_BIZ)
+        --           AND T1.ITEM_ATTR02_CD IN (@:VS_CB_LINE)
+        --           AND T1.ITEM_ATTR03_CD IN (@:VS_CB_BRAND)
+                GROUP BY T1.DIVISION_CD
+                    , T1.ITEM_ATTR01_CD
+                    , T1.ITEM_ATTR01_NM
+                    , T1.ITEM_ATTR02_CD
+                    , T1.ITEM_ATTR02_NM
+                    , T1.ITEM_ATTR03_CD
+                    , T1.ITEM_ATTR03_NM
+                    , T1.ITEM_ATTR04_CD
+                    , T1.ITEM_ATTR04_NM
+                    , T1.ITEM_CD
+                    , T1.ITEM_NM
+                    , T1.CUST_GRP_CD
+                    , T1.CUST_GRP_NM
+             ) T1
+          JOIN  M4S_I002030 CAL
+            ON 1=1
+           AND CAL.START_WEEK_DAY = CAL.YYMMDD
+        WHERE 1=1
+          AND CAL.YYMMDD BETWEEN LEFT(:VS_CB_DATA_VRSN, 8) AND RIGHT(:VS_CB_DATA_VRSN, 8)
+    ) T1
+ LEFT OUTER JOIN M4S_I002175 RST
+  ON T1.ITEM_CD = RST.ITEM_CD
+ AND T1.YY = RST.YYMMDD
+ AND T1.WEEK = RST.WEEK
+ AND RST.PROJECT_CD = :VS_P_PROJECT_CD
+ AND RST.DIVISION_CD = :VS_CB_DIVISION
+ AND RST.CUST_GRP_CD = :VS_CB_SP1
+ AND RST.ITEM_ATTR01_CD IN (@:VS_CB_BIZ)
+ AND RST.ITEM_ATTR02_CD IN (@:VS_CB_LINE)
+ AND RST.ITEM_ATTR03_CD IN (@:VS_CB_BRAND)
+
+
+
+
+SELECT YY + WEEK YY_W
+FROM M4S_I002030
+WHERE 1=1
+  AND PROJECT_CD = 'ENT001'
+  AND YYMMDD BETWEEN LEFT(:VS_CB_DATA_VRSN, 8) AND RIGHT(:VS_CB_DATA_VRSN, 8)
+  AND YYMMDD = START_WEEK_DAY
+
+
+SELECT * FROM M4S_I002175 WHERE ITEM_ATTR02_CD IS NULL
+
+SELECT *
+FROM M4S_I204030
+WHERE 1=1
+  AND PROJECT_CD = :VS_P_PROJECT_CD
+  AND SALES_MGMT_VRSN_ID = :VS_CB_SALES_MGMT_VRSN
+  AND SALES_MGMT_TYPE_CD = 'SP1'
+  AND LEFT(SALES_MGMT_CD, 7) = '1111101'
+
+
+SELECT SMC.PROJECT_CD
+    , SMC.SALES_MGMT_VRSN_ID
+    , SMC.SALES_MGMT_CD
+    , SHC.SALES_MGMT_NM
+    , SMC.ITEM_CD
+    , SHM.USER_CD
+FROM M4S_I204050 SMC
+  JOIN M4S_I204030 SHC
+    ON SMC.PROJECT_CD = SHC.PROJECT_CD
+   AND SMC.SALES_MGMT_VRSN_ID = SHC.SALES_MGMT_VRSN_ID
+   AND SMC.SALES_MGMT_CD = SHC.SALES_MGMT_CD
+  JOIN M4S_I204040 SHM
+    ON SMC.PROJECT_CD = SHM.PROJECT_CD
+   AND SMC.SALES_MGMT_VRSN_ID = SHM.SALES_MGMT_VRSN_ID
+   AND SMC.SALES_MGMT_CD = SHM.LINK_SALES_MGMT_CD
+WHERE 1=1
+  AND SMC.PROJECT_CD = :VS_P_PROJECT_CD
+  AND SMC.SALES_MGMT_VRSN_ID = :VS_CB_SALES_MGMT_VRSN
+  AND SMC.ITEM_CD IN (:VS_P_ITEM_CD)
+
+
+SELECT SHC.PROJECT_CD
+    , SHC.SALES_MGMT_VRSN_ID
+    , SHC.SALES_MGMT_CD
+    , SHC.SALES_MGMT_NM
+    , SHM.USER_CD
+FROM M4S_I204030 SHC
+  JOIN M4S_I204040 SHM
+    ON SHC.PROJECT_CD = SHM.PROJECT_CD
+   AND SHC.SALES_MGMT_VRSN_ID = SHM.SALES_MGMT_VRSN_ID
+   AND SHC.SALES_MGMT_TYPE_CD = SHM.SALES_MGMT_TYPE_CD
+   AND SHC.SALES_MGMT_CD = SHM.LINK_SALES_MGMT_CD
+WHERE 1=1
+  AND SHC.PROJECT_CD = :VS_P_PROJECT_CD
+  AND SHC.SALES_MGMT_VRSN_ID = :VS_CB_SALES_MGMT_VRSN
+  AND SHC.SALES_MGMT_TYPE_CD = 'SP1'
+  AND SHC.USE_YN = 'Y'
+  AND LEFT(SHC.SALES_MGMT_CD,4) IN (SELECT ATTR03_VAL
+                                FROM M4S_I002011
+                                WHERE 1=1
+                                  AND COMM_CD = 'ITEM_GUBUN02'
+                                  AND COMM_DTL_CD IN (:VS_CB_LINE_CD))
+  AND SHC.SALES_MGMT_CD NOT IN (SELECT SALES_MGMT_CD
+                            FROM M4S_I204050 SMC
+                            WHERE 1=1
+                              AND PROJECT_CD = :VS_P_PROJECT_CD
+                              AND SALES_MGMT_VRSN_ID = :VS_CB_SALES_MGMT_VRSN
+                              AND ITEM_CD IN (:VS_P_ITEM_CD)
+                              AND USE_YN = 'Y'
+                            )
+
+
+SELECT SHC.PROJECT_CD
+    , SHC.SALES_MGMT_VRSN_ID
+    , SHC.SALES_MGMT_CD
+    , SHC.SALES_MGMT_NM
+FROM M4S_I204030 SHC
+WHERE 1=1
+  AND SHC.PROJECT_CD = :VS_P_PROJECT_CD
+  AND SHC.SALES_MGMT_VRSN_ID = :VS_CB_SALES_MGMT_VRSN
+  AND SHC.SALES_MGMT_TYPE_CD = 'SP1'
+  AND SHC.USE_YN = 'Y'
+  AND LEFT(SHC.SALES_MGMT_CD,4) IN (SELECT ATTR03_VAL
+                                FROM M4S_I002011
+                                WHERE 1=1
+                                  AND COMM_CD = 'ITEM_GUBUN02'
+                                  AND COMM_DTL_CD IN (:VS_CB_LINE_CD)
+                                )
+  AND SHC.SALES_MGMT_CD NOT IN (SELECT SALES_MGMT_CD
+                            FROM M4S_I204050 SMC
+                            WHERE 1=1
+                              AND PROJECT_CD = :VS_P_PROJECT_CD
+                              AND SALES_MGMT_VRSN_ID = :VS_CB_SALES_MGMT_VRSN
+                              AND ITEM_CD = :VS_P_ITEM_CD
+                              AND USE_YN = 'Y'
+                            )
+
+SELECT SHC.PROJECT_CD
+    , SHC.SALES_MGMT_VRSN_ID
+    , SHC.SALES_MGMT_CD
+    , SHC.SALES_MGMT_NM
+FROM M4S_I204030 SHC
+WHERE 1=1
+  AND SHC.PROJECT_CD = :VS_P_PROJECT_CD
+  AND SHC.SALES_MGMT_VRSN_ID = :VS_CB_SALES_MGMT_VRSN
+  AND SHC.SALES_MGMT_TYPE_CD = 'SP1'
+  AND SHC.USE_YN = 'Y'
+  AND LEFT(SHC.SALES_MGMT_CD,4) = '1321'
+--  AND LEFT(SHC.SALES_MGMT_CD,7) = '1321111'
+  AND LEFT(SHC.SALES_MGMT_CD,7) <> '1321111'
+  AND SHC.SALES_MGMT_CD NOT IN (SELECT SALES_MGMT_CD
+                            FROM M4S_I204050 SMC
+                            WHERE 1=1
+                              AND PROJECT_CD = :VS_P_PROJECT_CD
+                              AND SALES_MGMT_VRSN_ID = :VS_CB_SALES_MGMT_VRSN
+                              AND ITEM_CD = :VS_P_ITEM_CD
+                              AND USE_YN = 'Y'
+                            )
+
+SELECT *
+FROM M4S_I002011
+WHERE 1=1
+  AND COMM_CD = 'ITEM_GUBUN02'
+  AND COMM_DTL_CD IN (:VS_CB_LINE_CD)
+
+
+SELECT * FROM M4S_I204040 WHERE SALES_MGMT_TYPE_CD = 'SP1' AND LINK_SALES_MGMT_CD = '11111011231'
+
+SELECT *
+FROM M4S_I204050
+WHERE 1=1
+  AND ITEM_CD = '5100001'
+
+  AND SALES_MGMT_CD = '11111011231'
+  AND PROJECT_CD = :VS_P_PROJECT_CD
+  AND SALES_MGMT_VRSN_ID = :VS_CB_SALES_MGMT_VRSN
+  AND ITEM_CD = :VS_P_ITEM_CD--'5139987'
+
+select * from m4s_i002040 where ITEM_ATTR01_CD = 'p6'
+
+select * from m4s_i002040 where ITEM_ATTR02_CD in ('p206', 'p210')
+
+
+SELECT SHC.PROJECT_CD
+     , SHC.SALES_MGMT_VRSN_ID
+     , SHC.SALES_MGMT_CD
+     , SHC.SALES_MGMT_NM
+     , SHM.USER_CD
+FROM M4S_I204030 SHC
+  JOIN M4S_I204040 SHM
+    ON SHC.PROJECT_CD 			= SHM.PROJECT_CD
+   AND SHC.SALES_MGMT_VRSN_ID 	= SHM.SALES_MGMT_VRSN_ID
+   AND SHC.SALES_MGMT_TYPE_CD 	= SHM.SALES_MGMT_TYPE_CD
+   AND SHC.SALES_MGMT_CD 		= SHM.LINK_SALES_MGMT_CD
+WHERE 1=1
+  AND SHC.PROJECT_CD 			= 'ENT001'
+  AND SHC.SALES_MGMT_VRSN_ID 	= '202111_V0'
+  AND SHC.SALES_MGMT_TYPE_CD 	= 'SP1'
+  AND SHC.USE_YN 				= 'Y'
+
+  AND LEFT(SHC.SALES_MGMT_CD,4) IN (
+										SELECT ATTR03_VAL
+										 FROM M4S_I002011
+										 WHERE 1=1
+										   AND COMM_CD 		= 'ITEM_GUBUN02'
+										   AND COMM_DTL_CD 	= 'P106,P106,P106'
+									)
+
+  AND SHC.SALES_MGMT_CD 		NOT IN (
+											SELECT SALES_MGMT_CD
+											FROM M4S_I204050 SMC
+											WHERE 1=1
+											AND PROJECT_CD 			= 'ENT001'
+											AND SALES_MGMT_VRSN_ID 	= '202111_V0'
+											AND ITEM_CD 			IN ('5101407','5101406','5101404')
+											AND USE_YN 				= 'Y'
+										)
+
+UNION
+SELECT SHC.PROJECT_CD
+     , SHC.SALES_MGMT_VRSN_ID
+     , SHC.SALES_MGMT_CD
+     , SHC.SALES_MGMT_NM
+     , SHM.USER_CD
+FROM M4S_I204030 SHC
+  JOIN M4S_I204040 SHM
+    ON SHC.PROJECT_CD 			= SHM.PROJECT_CD
+   AND SHC.SALES_MGMT_VRSN_ID 	= SHM.SALES_MGMT_VRSN_ID
+   AND SHC.SALES_MGMT_TYPE_CD 	= SHM.SALES_MGMT_TYPE_CD
+   AND SHC.SALES_MGMT_CD 		= SHM.LINK_SALES_MGMT_CD
+WHERE 1=1
+  AND SHC.PROJECT_CD 			= 'ENT001'
+  AND SHC.SALES_MGMT_VRSN_ID 	= '202111_V0'
+  AND SHC.SALES_MGMT_TYPE_CD 	= 'SP1'
+  AND SHC.USE_YN 				= 'Y'
+  AND LEFT(SHC.SALES_MGMT_CD,4) = '1321'
+
+  AND LEFT(SHC.SALES_MGMT_CD,7) <> '1321111'
+
+  AND SHC.SALES_MGMT_CD 		NOT IN (
+											SELECT SALES_MGMT_CD
+											FROM M4S_I204050 SMC
+											WHERE 1=1
+											AND PROJECT_CD 			= 'ENT001'
+											AND SALES_MGMT_VRSN_ID 	= '202111_V0'
+											AND ITEM_CD 			IN ('5101407','5101406','5101404')
+											AND USE_YN 				= 'Y'
+										)
+
+
+
+
+
+
+
+SELECT DISTINCT ITEM_ATTR03_CD FROM M4S_I002040 WHERE ITEM_CD IN (SELECT DISTINCT ITEM_CD FROM M4S_I204050 WHERE SALES_MGMT_VRSN_ID = '202112_V0')
+
+SELECT * FROM M4S_I002271
+
+SELECT * FROM M4S_I002011 WHERE COMM_CD = ''
+
+select * from m4s_I204020 WHERE SALES_MGMT_VRSN_ID = '202111_V0' AND LINK_SALES_MGMT_CD IN ('1065','1066','1067','1073','1074','1075','1076')
+
+SELECT * FROM M4S_I204010
+SELECT * FROM M4S_I204023
+
+SELECT *
+FROM M4S_I002173
+where 1=1
+and len(ITEM_CD) < 10
+
+SELECT * FROM M4S_I204050 WHERE SALES_MGMT_VRSN_ID = '202111_V0' AND RIGHT(SALES_MGMT_CD,4) IN ('1065')
+
+SELECT * FROM M4S_I002040 WHERE ITEM_CD = '5141698'5124851
+
+SELECT T1.PROJECT_CD
+	  ,T1.SALES_MGMT_VRSN_ID
+	  ,T1.LINK_SALES_MGMT_CD
+	  ,T1.LINK_SALES_MGMT_NM
+	  ,ISNULL(T2.YYMM, :VS_YM) YYMM
+	  ,T2.ISSUE_BRAND
+	  ,T3.ITEM_ATTR03_NM
+	  ,T2.DESCR
+FROM M4S_I204020 T1
+  LEFT OUTER JOIN M4S_I204023 T2
+  	ON T1.PROJECT_CD = T2.PROJECT_CD
+   AND T1.SALES_MGMT_VRSN_ID = T2.SALES_MGMT_VRSN_ID
+   AND T1.LINK_SALES_MGMT_CD = T2.SALES_MGMT_CD
+   AND T2.YYMM = :VS_YM
+  LEFT OUTER JOIN M4S_I002011 T3
+  	ON T2.PROJECT_CD = T3.PROJECT_CD
+   AND T2.ISSUE_BRAND = T3.COMM_DTL_CD
+   AND T3.COMM_CD = 'ITEM_GUBUN03'
+WHERE 1=1
+  AND T1.PROJECT_CD = @:VS_PROJECT_CD
+  AND T1.SALES_MGMT_VRSN_ID = (
+  								SELECT SALES_MGMT_VRSN_ID
+								FROM M4S_I204010
+								WHERE 1=1
+								  AND PROJECT_CD = @:VS_PROJECT_CD
+								  AND USE_YN = 'Y'
+  							)
+  AND T1.SALES_MGMT_TYPE_CD = 'SP1'
+  AND T1.ATTR02_VAL = 'Y'
+
+
+SELECT DISTINCT PLAN_YYMMDD, ATTR07, ATTR08 FROM M4S_O201001_NEW WHERE DP_VRSN_ID = 'SP_2021W52.03'
+SELECT DISTINCT PLAN_YYMMDD, ATTR07, ATTR08 FROM M4S_O201002_NEW WHERE DP_VRSN_ID = 'SP_2021W52.03'
+
+
+SELECT PROJECT_CD, SALES_MGMT_VRSN_ID, SALES_MGMT_CD, YYMM, BIZ_CD, LINE_CD, ISSUE_BRAND, DESCR, CREATE_USER_CD, CREATE_DATE, MODIFY_USER_CD, MODIFY_DATE FROM M4S_I204023
+
+
+
+SELECT * from M4S_I204023
+
+select * FROM M4S_I204020 WHERE 1=2
+
+SELECT DISTINCT PLAN_YYMMDD FROM M4S_O201002_NEW WHERE DP_VRSN_ID = 'SP_2021W52.03'
+
+-- 판매계획조회 테이블 변경
+ SELECT MAIN_SP1.SALES_MGMT_CD
+	  , MAIN_SP1.SALES_MGMT_NM
+	  , MAIN_SP1.SP2_CD
+	  , SALES.LINK_SALES_MGMT_NM
+	  , MAIN_SP1.ITEM_CD
+      , MAIN_SP1.ITEM_NM
+	  , MAIN_SP1.ITEM_ATTR01_CD
+	  , MAIN_SP1.ITEM_ATTR01_NM
+	  , MAIN_SP1.ITEM_ATTR02_CD
+	  , MAIN_SP1.ITEM_ATTR02_NM
+	  , MAIN_SP1.ITEM_ATTR03_CD
+	  , MAIN_SP1.ITEM_ATTR03_NM
+	  , MAIN_SP1.ITEM_ATTR04_CD
+	  , MAIN_SP1.ITEM_ATTR04_NM
+	  , MAIN_SP1.PLAN_YY
+	  , MAIN_SP1.PLAN_YYMMDD
+	  , MAIN_SP1.PLAN_YYMM
+      , MAIN_SP1.PLAN_WEEK
+      , MAIN_SP1.PLAN_PART_WEEK
+      , MAIN_SP1.SP1_QTY
+      , ISNULL(MAIN_SP2.SP1_QTY, 0) SP1_C_QTY
+ FROM M4S_O201001_NEW MAIN_SP1
+      LEFT OUTER JOIN M4S_O201002_NEW MAIN_SP2
+        ON MAIN_SP1.PROJECT_CD    = MAIN_SP2.PROJECT_CD
+       AND MAIN_SP1.DP_VRSN_ID    = MAIN_SP2.DP_VRSN_ID
+       AND MAIN_SP1.USER_CD       = MAIN_SP2.USER_CD
+       AND MAIN_SP1.SALES_MGMT_CD = MAIN_SP2.SALES_MGMT_CD
+       AND MAIN_SP1.PLAN_YYMMDD   = MAIN_SP2.PLAN_YYMMDD
+       AND MAIN_SP1.ITEM_CD       = MAIN_SP2.ITEM_CD
+      INNER JOIN (
+
+		 SELECT LINK_SALES_MGMT_CD
+			   , LINK_SALES_MGMT_NM
+		  FROM M4S_I204020
+		  WHERE SALES_MGMT_VRSN_ID = (
+									   SELECT SALES_MGMT_VRSN_ID
+										FROM M4S_O201010
+										WHERE DP_VRSN_ID = :VS_CB_DP_VRSN_ID  --'SP_2021W52.03'
+									  )
+			AND SALES_MGMT_TYPE_CD = 'SP2'
+			AND USE_YN = 'Y'
+
+	  )SALES ON ( MAIN_SP1.SP2_CD = SALES.LINK_SALES_MGMT_CD )
+ WHERE 1=1
+   AND MAIN_SP1.PROJECT_CD = :VS_PROJECT_CD --'ENT001' --
+   AND MAIN_SP1.DP_VRSN_ID = :VS_CB_DP_VRSN_ID --'SP_2021W52.03'
+  AND MAIN_SP1.SP2_C_CD   = :VS_CB_SP2_C
+   AND MAIN_SP1.SP2_CD   IN (@:VS_MCB_SP2)
+   AND MAIN_SP1.SP1_C_CD IN (@:VS_MCB_SP1_C)
+   AND MAIN_SP1.SP1_CD   IN (@:VS_MCB_SP1)
+   AND ( MAIN_SP1.ITEM_CD like '%'+@:VS_TB_KEYWORD+'%'or  MAIN_SP1.ITEM_NM like '%'+@:VS_TB_KEYWORD+'%'  )
+
+
+SELECT * FROM M4S_O201002_NEW
+SELECT ITEM_ATTR02_CD
+							 , ITEM_ATTR02_NM
+							 , ITEM_ATTR03_CD
+							 , ITEM_ATTR03_NM
+							 , ITEM_CD
+							 , ITEM_NM
+						FROM VIEW_I002040
+						WHERE USE_YN = 'Y'
+						  AND ITEM_ATTR01_CD = 'P1'
+						GROUP BY  ITEM_ATTR02_CD
+								, ITEM_ATTR02_NM
+								, ITEM_ATTR03_CD
+								, ITEM_ATTR03_NM
+								, ITEM_CD
+								, ITEM_NM
+
+
+
+
+
+

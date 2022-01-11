@@ -1,0 +1,680 @@
+create 
+     PROCEDURE [dbo].[PRC_FP_RESULT_TRANSFER_211014_Storage]
+(
+    -- 출력 매개변수
+    @O       VARCHAR(30)       OUTPUT, -- SYS_REFCURSOR,
+    -- 입력 매개변수
+    @P_PROJECT_CD   VARCHAR(4000),
+    @P_USER_CD      VARCHAR(4000),
+    @P_FP_VRSN_ID   VARCHAR(4000),
+    @P_FP_VRSN_SEQ  VARCHAR(4000),
+    @P_IF_VRSN_ID   VARCHAR(4000)
+)
+AS
+BEGIN  
+
+/**********************************************************************************/
+/* Project       : M4Plan Suites                                                  */
+/* Module        : 공급계획                                                        */
+/* Program Name  : PRC_FP_RESULT_TRANSFER                                         */
+/* Description   : Engine Table -> Meta Table DATA 적재                            */
+/*                (M4E_O402010~M4E_O402050 -> M4S_O402010~M4S_O402050)            */
+/* Referenced by :                                                                */
+/* Program History                                                                */
+/**********************************************************************************/
+/* Date             In Charge         Description                                 */
+/**********************************************************************************/
+/* 2021-01-27       J.I.Kang          Initial Release                             */
+/* 2021-03-31       M.S.KIM           M4S_O402050 수정                             */
+/* 2021-04-06       M.S.KIM           PROCEDURE 커서 변경                          */
+/* 2021-09-15 		Y.J.IM			  MSSQL Convert								  */
+/**********************************************************************************/
+
+DECLARE @V_PROC_NM                VARCHAR(50); -- 프로시저명
+
+DECLARE @V_FP_VRSN_ID             VARCHAR(20); -- FP 버전 ID
+DECLARE @V_FP_VRSN_SEQ            VARCHAR(50); -- FP 버전 순번
+DECLARE @V_IF_VRSN_ID             VARCHAR(20); -- 인터페이스 버전 ID
+
+DECLARE @V_PLANT_CD               VARCHAR(50); -- 공장코드
+DECLARE @V_ITEM_CD                VARCHAR(50); -- 제품코드
+DECLARE @V_PLAN_YYMM              VARCHAR(6);  -- 계획 월
+DECLARE @V_PLAN_WEEK              VARCHAR(10); -- 계획 주차
+-- DECLARE @V_PLAN_PART_WEEK         VARCHAR(10); -- 계획 부분 주차
+
+DECLARE @V_DP_KEY                 VARCHAR(50); -- DEMAND KEY
+DECLARE @V_SALES_MGMT_CD          VARCHAR(50); -- 영업관리코드
+DECLARE @V_SOLD_CUST_GRP_CD       VARCHAR(50); -- 판매처
+DECLARE @V_SHIP_CUST_GRP_CD       VARCHAR(50); -- 인도처
+DECLARE @V_REQ_FP_QTY             DECIMAL(18,3); -- 공급요청량
+
+DECLARE @V_RES_CAPA_VAL           DECIMAL(18,3); -- 설비 CAPA
+DECLARE @V_OVER_CAPA_VAL          DECIMAL(18,3); -- 설비 OVER CAPA
+
+DECLARE @V_PARAMETER              VARCHAR(200); -- 프로시저 파라미터
+
+SET NOCOUNT ON; 
+    /*
+    M4S_O402010  공급 계획 결과
+    M4S_O402020  공급 계획 재고 결과
+    M4S_O402030  공급 계획 투입 결과
+    M4S_O402040  공급 계획 생산 결과
+    M4S_O402050  공급 계획 CAPA 사용량
+
+    M4S_O402010  공급 계획 결과
+    M4S_O402020  공급 계획 재고 결과
+    M4S_O402030  공급 계획 투입 결과
+    M4S_O402040  공급 계획 생산 결과
+    M4S_O402050  공급 계획 CAPA 사용량
+    */
+
+    -- 프로시저명
+    SET @V_PROC_NM = 'PRC_FP_RESULT_TRANSFER';
+    
+    SET @V_PARAMETER = 'PROJECT_CD : ' + @P_PROJECT_CD + ' | USER_CD : ' + @P_USER_CD + ' | FP_VRSN_ID : ' + @P_FP_VRSN_ID + ' | FP_VRSN_SEQ : ' + @P_FP_VRSN_SEQ + ' | IF_VRSN_ID : ' + @P_IF_VRSN_ID;
+
+    -- M4S_SCM_PROC_LOG: 프로시저 로그를 저장하는 프로시저 => M4S_I001030(로그 관리)에 저장 , MTX_SCM_PROC_LOG 프로시저 변형(COMMIT 없음)
+    DECLARE @STR VARCHAR(400);
+    SET @STR = @V_PROC_NM + '(' + @V_PARAMETER + ')';
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, @STR, 'ALL START';
+    
+    SET @V_FP_VRSN_ID  = @P_FP_VRSN_ID;
+    SET @V_FP_VRSN_SEQ = @P_FP_VRSN_SEQ;
+    SET @V_IF_VRSN_ID  = @P_IF_VRSN_ID;
+    
+    IF @P_PROJECT_CD IS NOT NULL BEGIN -- 프로젝트 변수가 NULL이 아니면..
+        IF @V_FP_VRSN_ID IS NULL OR @V_FP_VRSN_SEQ IS NULL OR @V_IF_VRSN_ID IS NULL BEGIN -- FP 버전 ID, FP 버전 순번, 인터페이스 버전 ID가 NULL일 경우 
+            BEGIN TRY
+              SELECT @V_FP_VRSN_ID = FP_VRSN_ID,
+                     @V_FP_VRSN_SEQ = FP_VRSN_SEQ,
+                     @V_IF_VRSN_ID = IF_VRSN_ID
+                FROM M4E_I401010
+               WHERE 1=1
+                 AND PROJECT_CD  = @P_PROJECT_CD
+                 AND PRGS_STA_CD = 'P01'; -- 진행중 상태
+            END TRY
+            BEGIN CATCH
+            --EXCEPTION 
+              --WHEN OTHERS THEN  
+                -- FP 버전 ID, FP 버전 순번, 인터페이스 버전 ID가 NULL일 경우 프로시저 종료
+                SET @V_FP_VRSN_ID  = NULL;  
+                SET @V_FP_VRSN_SEQ = NULL;     
+                SET @V_IF_VRSN_ID  = NULL;    
+                
+                SET @STR = @V_PROC_NM + '(' + @V_PARAMETER + ')';
+                exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, @STR, 'ALL END';
+                COMMIT;
+                RETURN;
+            END CATCH;
+        END 
+    END
+    ELSE BEGIN  -- 프로젝트 변수가 NULL이면 프로시저 종료
+    	SET @STR = @V_PROC_NM + '(' + @V_PARAMETER + ')';
+        exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, @STR, 'ALL END';
+        COMMIT;
+        RETURN;
+    END 
+    
+    --DBMS_OUTPUT.PUT_LINE('PRC_FP_RESULT_TRANSFER 프로시저 START!!!');
+    /***********************************************************************************************************/
+    /*    DELETE                                                                                               */
+    /***********************************************************************************************************/
+
+    -- 01.START -----------------------------------------------------------------------------------------------
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(1)M4S_O402010 공급 계획 결과 테이블 DELETE', '01.START';
+
+    DELETE M4S_O402010  --공급 계획 결과
+     WHERE 1=1
+       AND PROJECT_CD  = @P_PROJECT_CD
+       AND FP_VRSN_ID  = @V_FP_VRSN_ID
+       AND FP_VRSN_SEQ = @V_FP_VRSN_SEQ
+    ;
+
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(1)M4S_O402010 공급 계획 결과 테이블 DELETE', '01.END';
+    -- 01.END ---------------------------------------------------------------------------------------------------
+
+    -- 02.START -------------------------------------------------------------------------------------------------
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(2)M4S_O402020 공급 계획 재고 결과 테이블 DELETE', '02.START';
+
+    DELETE M4S_O402020  --공급 계획 재고 결과
+    WHERE 1=1
+      AND PROJECT_CD  = @P_PROJECT_CD
+      AND FP_VRSN_ID  = @V_FP_VRSN_ID
+      AND FP_VRSN_SEQ = @V_FP_VRSN_SEQ
+    ;
+
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(2)M4S_O402020 공급 계획 재고 결과 테이블 DELETE', '02.END';
+    -- 02.END ---------------------------------------------------------------------------------------------------
+
+    -- 03.START -------------------------------------------------------------------------------------------------
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(3)M4S_O402030 공급 계획 투입 결과 테이블 DELETE', '03.START';
+
+    DELETE M4S_O402030  --공급 계획 투입 결과
+    WHERE 1=1
+      AND PROJECT_CD    = @P_PROJECT_CD
+      AND FP_VRSN_ID    = @V_FP_VRSN_ID
+      AND FP_VRSN_SEQ   = @V_FP_VRSN_SEQ
+    ;
+
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(3)M4S_O402030 공급 계획 투입 결과 테이블 DELETE', '03.END';
+    -- 03.END ---------------------------------------------------------------------------------------------------
+
+    -- 04.START -------------------------------------------------------------------------------------------------
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(4)M4S_O402040 공급 계획 생산 결과 테이블 DELETE', '04.START';
+
+    DELETE M4S_O402040  --공급 계획 생산 결과
+     WHERE 1=1
+       AND PROJECT_CD    = @P_PROJECT_CD
+       AND FP_VRSN_ID    = @V_FP_VRSN_ID
+       AND FP_VRSN_SEQ   = @V_FP_VRSN_SEQ
+    ;
+
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(4)M4S_O402040 공급 계획 생산 결과 테이블 DELETE', '04.END';
+    -- 04.END ---------------------------------------------------------------------------------------------------
+
+    -- 05.START -------------------------------------------------------------------------------------------------
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(5)M4S_O402050 공급 계획 CAPA 사용량 테이블 DELETE', '05.START';
+
+    DELETE M4S_O402050  --공급계획 실행 DEMAND 정보
+     WHERE 1=1
+       AND PROJECT_CD    = @P_PROJECT_CD
+       AND FP_VRSN_ID    = @V_FP_VRSN_ID
+       AND FP_VRSN_SEQ   = @V_FP_VRSN_SEQ
+    ;
+
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(5)M4S_O402050 공급 계획 CAPA 사용량 테이블 DELETE', '05.END';
+    -- 05.END ---------------------------------------------------------------------------------------------------
+
+	/*
+    -- 06.START -------------------------------------------------------------------------------------------------
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(6)M4S_O402060 공급 계획 문제리스트 DELETE', '06.START';
+
+    DELETE M4S_O402060  --공급 계획 문제리스트
+     WHERE 1=1
+       AND PROJECT_CD    = @P_PROJECT_CD
+       AND FP_VRSN_ID    = @V_FP_VRSN_ID
+       AND FP_VRSN_SEQ   = @V_FP_VRSN_SEQ
+    ;
+
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(6)M4S_O402060 공급 계획 문제리스트 DELETE', '06.END';
+    -- 06.END ---------------------------------------------------------------------------------------------------
+	
+*/
+
+    --COMMIT;
+
+    /***********************************************************************************************************/
+    /*    INSERT                                                                                               */
+    /***********************************************************************************************************/
+    
+    -- 07.START -------------------------------------------------------------------------------------------------
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(7)M4S_O402010 공급 계획 결과 테이블 INSERT', '07.START';
+    
+    --공급 계획 결과 
+    INSERT INTO M4S_O402010 
+     (   
+         PROJECT_CD          ,
+         FP_VRSN_ID          ,
+         FP_VRSN_SEQ         ,
+         FP_KEY              ,
+         DP_KEY              ,
+         TIME_INDEX          ,
+         SALES_MGMT_CD       ,     
+         SOLD_CUST_GRP_CD    ,
+         SHIP_CUST_GRP_CD    ,
+         ENG_ITEM_CD         ,
+         PLAN_YY             , -- 계획 년
+         PLAN_MM             , -- 계획 월
+         PLAN_YYMM           ,
+         PLAN_YYMMDD         , -- 계획 일자
+         PLAN_WEEK           , 
+         --PLAN_PART_WEEK    ,
+         REQ_FP_QTY          ,
+         FP_QTY              ,
+         PLANT_CD            ,
+		 STRG_CD			 ,
+         ITEM_CD             ,
+         CREATE_USER_CD      ,
+         CREATE_DATE         ,
+         MODIFY_USER_CD      ,
+         MODIFY_DATE      
+      )   
+      SELECT
+         T1.PROJECT_CD          ,
+         T1.FP_VRSN_ID          ,
+         T1.FP_VRSN_SEQ         ,
+         T1.FP_KEY              ,
+         T4.DP_KEY              ,
+         T1.TIME_INDEX          ,
+         '' AS SALES_MGMT_CD       ,     
+         T4.SOLD_CUST_GRP_CD    ,
+         T4.SHIP_CUST_GRP_CD    ,
+         T1.ENG_ITEM_CD         ,
+         T3.YY AS PLAN_YY           , -- 계획 년
+         SUBSTRING(T3.YYMM,5,2) AS PLAN_MM           , -- 계획 월
+         T3.YYMM AS PLAN_YYMM           ,
+         T3.YYMMDD AS PLAN_YYMMDD        , -- 계획 일자
+         T3.WEEK AS PLAN_WEEK           , 
+         --PLAN_PART_WEEK      ,
+         ISNULL(T4.REQ_FP_QTY,0) AS REQ_FP_QTY          ,
+         ISNULL(T1.FP_QTY,0)   AS FP_QTY            ,
+         SUBSTRING(T1.ENG_ITEM_CD, CHARINDEX('@', T1.ENG_ITEM_CD) + 1, CHARINDEX('_', T1.ENG_ITEM_CD) - (CHARINDEX('@', T1.ENG_ITEM_CD) + 1)) AS PLANT_CD            ,
+		 SUBSTRING(T1.ENG_ITEM_CD, CHARINDEX('_', T1.ENG_ITEM_CD) + 1, LEN(T1.ENG_ITEM_CD) - CHARINDEX('_', T1.ENG_ITEM_CD))			,
+         SUBSTRING(T1.ENG_ITEM_CD, 1, CHARINDEX('@', T1.ENG_ITEM_CD) - 1) AS ITEM_CD             ,
+         @P_USER_CD AS CREATE_USER_CD      ,
+         GETDATE() AS CREATE_DATE         ,
+         @P_USER_CD AS MODIFY_USER_CD      ,
+         GETDATE() AS MODIFY_DATE        
+      FROM M4e_O402010 T1
+         LEFT OUTER JOIN M4E_I401050 T2
+            ON T1.PROJECT_CD        = T2.PROJECT_CD
+               AND T1.FP_VRSN_ID    = T2.FP_VRSN_ID
+               AND T1.FP_VRSN_SEQ   = T2.FP_VRSN_SEQ
+               AND T1.TIME_INDEX    = T2.TIME_INDEX
+         LEFT OUTER JOIN M4S_I002030 T3
+            ON T1.PROJECT_CD        = T3.PROJECT_CD
+               AND T2.START_YYMMDD  = T3.YYMMDD
+         LEFT OUTER JOIN M4E_I401060 T4
+            ON T1.PROJECT_CD        = T4.PROJECT_CD
+               AND T1.FP_KEY        = T4.FP_KEY
+               AND T1.FP_VRSN_ID    = T4.FP_VRSN_ID
+               AND T1.FP_VRSN_SEQ   = T4.FP_VRSN_SEQ
+      WHERE 1=1
+         AND T1.PROJECT_CD          = @P_PROJECT_CD
+         AND T1.FP_VRSN_ID          = @V_FP_VRSN_ID
+         AND T1.FP_VRSN_SEQ         = @V_FP_VRSN_SEQ
+        ;
+
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(7)M4S_O402010 공급 계획 결과 테이블 INSERT', '07.END';
+    -- 07.END ---------------------------------------------------------------------------------------------------
+    
+
+
+    -- 08.START -------------------------------------------------------------------------------------------------
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(8)M4S_O402020 공급 계획 재고 결과 테이블 INSERT', '08.START';
+    
+    --공급 계획 재고 결과
+    INSERT INTO M4S_O402020 
+    (   
+     PROJECT_CD          ,
+     FP_VRSN_ID          ,
+     FP_VRSN_SEQ         ,
+     ENG_ITEM_CD         ,
+     TIME_INDEX          ,
+     PLAN_YY             , -- 계획 년
+     PLAN_MM             , -- 계획 월
+     PLAN_WEEK           ,
+     PLAN_YYMM           ,
+     PLAN_YYMMDD         , -- 계획 일자
+     INV_QTY             ,
+     PLANT_CD            ,
+	 STRG_CD			 ,
+     ITEM_CD             ,
+     CREATE_USER_CD      ,
+     CREATE_DATE         ,
+     MODIFY_USER_CD      ,
+     MODIFY_DATE      
+   )   
+    SELECT
+        T1.PROJECT_CD          ,
+        T1.FP_VRSN_ID          ,
+        T1.FP_VRSN_SEQ         ,
+        T1.ENG_ITEM_CD         ,
+        T1.TIME_INDEX          ,
+        T3.YY AS PLAN_YY           , -- 계획 년
+        SUBSTRING(T3.YYMM,5,2) AS PLAN_MM           , -- 계획 월
+        T3.WEEK AS PLAN_WEEK           ,
+        T3.YYMM AS PLAN_YYMM           ,
+        T3.YYMMDD AS PLAN_YYMMDD        , -- 계획 일자
+        ISNULL(T1.INV_QTY,0) AS INV_QTY             ,
+        SUBSTRING(T1.ENG_ITEM_CD, CHARINDEX('@', T1.ENG_ITEM_CD) + 1, CHARINDEX('_', T1.ENG_ITEM_CD) - (CHARINDEX('@', T1.ENG_ITEM_CD) + 1)) AS PLANT_CD            ,
+        SUBSTRING(T1.ENG_ITEM_CD, CHARINDEX('_', T1.ENG_ITEM_CD) + 1, LEN(T1.ENG_ITEM_CD) - CHARINDEX('_', T1.ENG_ITEM_CD)) AS STRG_CD            ,
+        SUBSTRING(T1.ENG_ITEM_CD, 1, CHARINDEX('@', T1.ENG_ITEM_CD) - 1) AS ITEM_CD             ,
+        @P_USER_CD AS CREATE_USER_CD      ,
+        GETDATE() AS CREATE_DATE         ,
+        @P_USER_CD AS MODIFY_USER_CD      ,
+        GETDATE() AS MODIFY_DATE
+    FROM M4E_O402020 T1
+        LEFT OUTER JOIN M4E_I401050 T2
+            ON T1.PROJECT_CD        = T2.PROJECT_CD
+                AND T1.FP_VRSN_ID   = T2.FP_VRSN_ID
+                AND T1.FP_VRSN_SEQ  = T2.FP_VRSN_SEQ
+                AND T1.TIME_INDEX   = T2.TIME_INDEX
+        LEFT OUTER JOIN M4S_I002030 T3
+            ON T1.PROJECT_CD        = T3.PROJECT_CD
+                AND T2.START_YYMMDD = T3.YYMMDD
+    WHERE 1=1
+        AND T1.PROJECT_CD           = @P_PROJECT_CD
+        AND T1.FP_VRSN_ID           = @V_FP_VRSN_ID
+        AND T1.FP_VRSN_SEQ          = @V_FP_VRSN_SEQ
+    ;
+    
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(8)M4S_O402020 공급 계획 재고 결과 테이블 INSERT', '08.END';
+    -- 08.END ---------------------------------------------------------------------------------------------------
+    
+    
+    -- 09.START -------------------------------------------------------------------------------------------------
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(9)M4S_O402030 공급 계획 투입 결과 테이블 INSERT', '09.START';
+    
+    -- 공급계획 투입 결과 
+    INSERT INTO M4S_O402030
+    (
+        PROJECT_CD
+        ,FP_VRSN_ID
+        ,FP_VRSN_SEQ
+        ,OUT_ITEM_CD
+        ,ROUTE_CD
+        ,TIME_INDEX          
+        ,PLAN_YY
+        ,PLAN_MM
+        ,PLAN_WEEK
+        ,PLAN_YYMM
+        ,PLAN_YYMMDD
+        ,ITEM_OUT_QTY
+        ,PLANT_CD
+		,STRG_CD
+        ,TO_PLANT_CD
+		,TO_STRG_CD
+        ,ITEM_CD
+        ,CREATE_USER_CD
+        ,CREATE_DATE
+    )
+    SELECT T1.PROJECT_CD
+		  , T1.FP_VRSN_ID
+		  , T1.FP_VRSN_SEQ
+		  , SUBSTRING(T1.OUT_ITEM_CD, 1, CASE WHEN CHARINDEX('@', T1.OUT_ITEM_CD) = 0 THEN LEN(T1.OUT_ITEM_CD) ELSE CHARINDEX('@', T1.OUT_ITEM_CD) - 1 END) OUT_ITEM_CD
+		  , SUBSTRING(T1.ROUTE_CD, 1, CHARINDEX('@', T1.ROUTE_CD)-1) ROUTE_CD
+		  , T1.TIME_INDEX
+		  , T3.YY                                                                    AS PLAN_YY
+		  , SUBSTRING(T3.YYMM,LEN(T3.YYMM)-1,2)                                      AS PLAN_MM
+		  , T3.WEEK                                                                  AS PLAN_WEEK
+		  , T3.YYMM                                                                  AS PLAN_YYMM
+		  , T3.YYMMDD                                                                AS PLAN_YYMMDD
+		  , T1.ITEM_OUT_QTY
+		  , SUBSTRING(T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1, CHARINDEX('_', T1.ROUTE_CD) - (CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1))  PLANT_CD
+		  , CASE WHEN CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1) = 0 
+		  			THEN SUBSTRING(T1.ROUTE_CD,CHARINDEX('_', T1.ROUTE_CD) + 1, LEN(T1.ROUTE_CD) - CHARINDEX('_', T1.ROUTE_CD))
+		  		ELSE SUBSTRING(T1.ROUTE_CD,CHARINDEX('_', T1.ROUTE_CD) + 1,CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1) - (CHARINDEX('_', T1.ROUTE_CD) + 1)) END STRG_CD
+		  , CASE WHEN CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1) = 0 
+		  			THEN SUBSTRING(T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1, CHARINDEX('_', T1.ROUTE_CD) - (CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1))
+		  		ELSE SUBSTRING(T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1) + 1,CHARINDEX('@', T1.ROUTE_CD, LEN(T1.ROUTE_CD) - CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1) - 1) END TO_PLANT_CD
+		  , CASE WHEN CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1) = 0 
+		  			THEN SUBSTRING(T1.ROUTE_CD,CHARINDEX('_', T1.ROUTE_CD) + 1, LEN(T1.ROUTE_CD) - CHARINDEX('_', T1.ROUTE_CD))
+		  		ELSE SUBSTRING(T1.ROUTE_CD, CHARINDEX('_', T1.ROUTE_CD, CHARINDEX('_', T1.ROUTE_CD) + 1) + 1, LEN(T1.ROUTE_CD) - CHARINDEX('_', T1.ROUTE_CD, CHARINDEX('_', T1.ROUTE_CD) + 1)) END TO_STRG_CD
+		  , SUBSTRING(T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD)+1) - CHARINDEX('@', T1.ROUTE_CD) - 1) ITEM_CD  
+          , @P_USER_CD                                                                AS CREATE_USER_CD
+          ,GETDATE()                                                                  AS CREATE_DATE     
+    FROM M4E_O402030 T1-- E_공급계획 투입 결과
+    INNER JOIN M4E_I401050 T2 -- 엔진 CAL
+    ON T1.PROJECT_CD        = T2.PROJECT_CD
+    AND T1.FP_VRSN_ID       = T2.FP_VRSN_ID
+    AND T1.FP_VRSN_SEQ      = T2.FP_VRSN_SEQ
+    AND T1.TIME_INDEX       = T2.TIME_INDEX
+    INNER JOIN M4S_I002030 T3 -- CAL
+    ON T1.PROJECT_CD        = T3.PROJECT_CD
+    AND T2.START_YYMMDD     = T3.YYMMDD
+    WHERE T1.PROJECT_CD     = @P_PROJECT_CD
+      AND T1.FP_VRSN_ID     = @V_FP_VRSN_ID 
+      AND T1.FP_VRSN_SEQ    = @V_FP_VRSN_SEQ
+    ;
+
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(9)M4S_O402030 공급 계획 투입 결과 테이블 INSERT', '09.END';
+    -- 09.END ---------------------------------------------------------------------------------------------------
+
+    
+    -- 10.START -------------------------------------------------------------------------------------------------
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(10)M4S_O402040 공급 계획 생산 결과 테이블 INSERT', '10.START';
+    
+     -- 공급계획 생산 결과 
+    INSERT INTO M4S_O402040
+    (
+        PROJECT_CD
+        ,FP_VRSN_ID
+        ,FP_VRSN_SEQ
+        ,ROUTE_CD
+        ,TIME_INDEX
+        ,IN_ITEM_CD
+        ,PLAN_YY
+        ,PLAN_MM
+        ,PLAN_WEEK
+        ,PLAN_YYMM
+        ,PLAN_YYMMDD
+        ,ITEM_IN_QTY
+        ,PLANT_CD
+		,STRG_CD
+        ,FROM_PLANT_CD
+		,FROM_STRG_CD
+        ,ITEM_CD
+        ,CREATE_USER_CD
+        ,CREATE_DATE
+    )
+    SELECT T1.PROJECT_CD
+          ,T1.FP_VRSN_ID
+          ,T1.FP_VRSN_SEQ
+          ,SUBSTRING(T1.ROUTE_CD,1,CHARINDEX('@', T1.ROUTE_CD)-1)                           AS ROUTE_CD
+          ,T1.TIME_INDEX
+          ,SUBSTRING(T1.IN_ITEM_CD,1,CHARINDEX('@', T1.IN_ITEM_CD)-1)                       AS IN_ITEM_CD
+          ,T3.YY                                                                    AS PLAN_YY
+          ,SUBSTRING(T3.YYMM,LEN(T3.YYMM) - 1, 2)                                                       AS PLAN_MM
+          ,T3.WEEK                                                                  AS PLAN_WEEK
+          ,T3.YYMM                                                                  AS PLAN_YYMM
+          ,T3.YYMMDD                                                                AS PLAN_YYMMDD
+          ,T1.ITEM_IN_QTY 
+          ,CASE WHEN CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1) = 0 
+		  			THEN SUBSTRING(T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1, CHARINDEX('_', T1.ROUTE_CD) - (CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1))
+		  		ELSE SUBSTRING(T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1) + 1,CHARINDEX('@', T1.ROUTE_CD, LEN(T1.ROUTE_CD) - CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1) - 1) END PLANT_CD
+		  , CASE WHEN CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1) = 0 
+		  			THEN SUBSTRING(T1.ROUTE_CD,CHARINDEX('_', T1.ROUTE_CD) + 1, LEN(T1.ROUTE_CD) - CHARINDEX('_', T1.ROUTE_CD))
+		  		ELSE SUBSTRING(T1.ROUTE_CD, CHARINDEX('_', T1.ROUTE_CD, CHARINDEX('_', T1.ROUTE_CD) + 1) + 1, LEN(T1.ROUTE_CD) - CHARINDEX('_', T1.ROUTE_CD, CHARINDEX('_', T1.ROUTE_CD) + 1)) END STRG_CD
+		  , SUBSTRING(T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1, CHARINDEX('_', T1.ROUTE_CD) - (CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1))  FROM_PLANT_CD
+		  , CASE WHEN CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1) = 0 
+		  			THEN SUBSTRING(T1.ROUTE_CD,CHARINDEX('_', T1.ROUTE_CD) + 1, LEN(T1.ROUTE_CD) - CHARINDEX('_', T1.ROUTE_CD))
+		  		ELSE SUBSTRING(T1.ROUTE_CD,CHARINDEX('_', T1.ROUTE_CD) + 1,CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1) + 1) - (CHARINDEX('_', T1.ROUTE_CD) + 1)) END FROM_STRG_CD
+		  ,SUBSTRING(T1.IN_ITEM_CD,1,CASE WHEN CHARINDEX('@', T1.IN_ITEM_CD) = 0 THEN LEN(T1.IN_ITEM_CD) ELSE CHARINDEX('@', T1.IN_ITEM_CD)-1 END)                       AS ITEM_CD
+          , @P_USER_CD                                                                AS CREATE_USER_CD
+          ,GETDATE()                                                                  AS CREATE_DATE       
+    FROM M4E_O402040 T1-- E_공급계획 생산 결과
+    INNER JOIN M4E_I401050 T2 -- 엔진 CAL
+    ON T1.PROJECT_CD        = T2.PROJECT_CD
+    AND T1.FP_VRSN_ID       = T2.FP_VRSN_ID
+    AND T1.FP_VRSN_SEQ      = T2.FP_VRSN_SEQ
+    AND T1.TIME_INDEX       = T2.TIME_INDEX
+    INNER JOIN M4S_I002030 T3 -- CAL
+    ON T1.PROJECT_CD        = T3.PROJECT_CD
+    AND T2.START_YYMMDD     = T3.YYMMDD
+    WHERE T1.PROJECT_CD     = @P_PROJECT_CD
+      AND T1.FP_VRSN_ID     = @V_FP_VRSN_ID 
+      AND T1.FP_VRSN_SEQ    = @V_FP_VRSN_SEQ
+    ;
+   
+
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(10)M4S_O402040 공급 계획 생산 결과 테이블 INSERT', '10.END';
+    -- 10.END ---------------------------------------------------------------------------------------------------
+
+    -- 11.START -------------------------------------------------------------------------------------------------
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(11)M4S_O402050 공급 계획 CAPA 사용량 테이블 INSERT', '11.START';
+    
+    --공급 계획 CAPA 사용량
+    INSERT INTO M4S_O402050 
+      (   
+         PROJECT_CD             ,
+         FP_VRSN_ID             ,
+         FP_VRSN_SEQ            ,
+         ROUTE_CD               ,
+         TIME_INDEX             ,
+         RES_CD                 ,
+         PLANT_CD               ,
+		 STRG_CD				,
+         ITEM_CD                ,
+         PLAN_YY                ,
+         PLAN_MM                ,
+         PLAN_WEEK              ,
+         PLAN_YYMM              ,
+         PLAN_YYMMDD            ,
+         RES_CAPA_VAL           ,
+         RES_USE_CAPA_VAL       ,
+         RES_REMAIN_CAPA_VAL    ,
+         CREATE_USER_CD         ,
+         CREATE_DATE            ,
+         MODIFY_USER_CD         ,
+         MODIFY_DATE            , 
+         ORG_ROUTE_CD           
+      )
+      SELECT
+            T1.PROJECT_CD             ,
+            T1.FP_VRSN_ID             ,
+            T1.FP_VRSN_SEQ            ,
+            SUBSTRING(T1.ROUTE_CD, 1,CHARINDEX('@', T1.ROUTE_CD)-1) AS ROUTE_CD           ,
+            T1.TIME_INDEX             ,
+            SUBSTRING(T1.RES_CD, 1,CHARINDEX('@', T1.RES_CD)-1) AS RES_CD                 ,
+            SUBSTRING(T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD,CHARINDEX('@', T1.ROUTE_CD) + 1) + 1, CHARINDEX('_', T1.ROUTE_CD) - (CHARINDEX('@', T1.ROUTE_CD,CHARINDEX('@', T1.ROUTE_CD)+1)+1)) AS PLANT_CD             ,
+            SUBSTRING(T1.ROUTE_CD, CHARINDEX('_', T1.ROUTE_CD) + 1, LEN(T1.ROUTE_CD) - CHARINDEX('_', T1.ROUTE_CD)) AS STRG_CD             ,
+            SUBSTRING(T1.ROUTE_CD, CHARINDEX('@', T1.ROUTE_CD) + 1,CHARINDEX('@', T1.ROUTE_CD,CHARINDEX('@', T1.ROUTE_CD)+1)-CHARINDEX('@', T1.ROUTE_CD)-1) AS ITEM_CD              ,
+            T3.YY AS PLAN_YY                            ,
+            SUBSTRING(T3.YYMM,5,2) AS PLAN_MM              ,
+            T3.WEEK AS PLAN_WEEK                        ,
+            T3.YYMM AS PLAN_YYMM                        ,
+            T3.YYMMDD AS PLAN_YYMMDD                    ,
+            CASE WHEN T5.RES_CAPA_VAL IS NOT NULL THEN T5.RES_CAPA_VAL  ELSE ISNULL(T4.RES_CAPA_VAL,0)  END + CASE WHEN T5.OVER_CAPA_VAL IS NOT NULL THEN T5.OVER_CAPA_VAL ELSE ISNULL(T4.OVER_CAPA_VAL,0) END AS RES_CAPA_VAL           ,
+            ISNULL(T1.RES_USE_CAPA_VAL,0) AS RES_USE_CAPA_VAL       ,
+            CASE WHEN T5.RES_CAPA_VAL IS NOT NULL THEN T5.RES_CAPA_VAL  ELSE ISNULL(T4.RES_CAPA_VAL,0)  END + CASE WHEN T5.OVER_CAPA_VAL IS NOT NULL THEN T5.OVER_CAPA_VAL ELSE ISNULL(T4.OVER_CAPA_VAL,0) END - ISNULL(T1.RES_USE_CAPA_VAL,0) RES_REMAIN_CAPA_VAL    ,
+            @P_USER_CD AS CREATE_USER_CD         ,
+            GETDATE() AS CREATE_DATE              ,
+            @P_USER_CD AS MODIFY_USER_CD         ,
+            GETDATE() AS MODIFY_DATE              ,
+            T1.ROUTE_CD AS ORG_ROUTE_CD                   
+        FROM (SELECT PROJECT_CD	
+					, FP_VRSN_ID
+					, FP_VRSN_SEQ
+					, ROUTE_CD
+					, RES_CD
+					, TIME_INDEX
+					, SUM(RES_USE_CAPA_VAL) RES_USE_CAPA_VAL
+				FROM M4E_O402050
+				GROUP BY PROJECT_CD	
+					, FP_VRSN_ID
+					, FP_VRSN_SEQ
+					, ROUTE_CD
+					, RES_CD
+					, TIME_INDEX )T1
+            LEFT OUTER JOIN M4E_I401050 T2
+                ON T1.PROJECT_CD = T2.PROJECT_CD
+                    AND T1.FP_VRSN_ID = T2.FP_VRSN_ID
+                    AND T1.FP_VRSN_SEQ = T2.FP_VRSN_SEQ
+                    AND T1.TIME_INDEX = T2.TIME_INDEX
+            LEFT OUTER JOIN M4S_I002030 T3
+                ON T1.PROJECT_CD = T3.PROJECT_CD
+                    AND T2.START_YYMMDD = T3.YYMMDD
+            LEFT OUTER JOIN M4E_I401100 T4--RES
+                ON T1.PROJECT_CD = T4.PROJECT_CD
+                    AND T1.FP_VRSN_ID = T4.FP_VRSN_ID
+                    AND T1.FP_VRSN_SEQ = T4.FP_VRSN_SEQ
+                    AND T1.RES_CD = T4.RES_CD
+                    AND T1.TIME_INDEX BETWEEN T4.START_TIME_INDEX AND T4.END_TIME_INDEX
+            LEFT OUTER JOIN M4E_I401110 T5--CAPA
+                ON T1.PROJECT_CD = T5.PROJECT_CD
+                    AND T1.FP_VRSN_ID = T5.FP_VRSN_ID
+                    AND T1.FP_VRSN_SEQ = T5.FP_VRSN_SEQ
+                    AND T1.RES_CD = T5.RES_CD
+                    AND T1.TIME_INDEX = T5.TIME_INDEX
+            WHERE T1.PROJECT_CD     = @P_PROJECT_CD
+              AND T1.FP_VRSN_ID     = @V_FP_VRSN_ID 
+              AND T1.FP_VRSN_SEQ    = @V_FP_VRSN_SEQ
+            ;   
+
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(11)M4S_O402050 공급 계획 CAPA 사용량 테이블 INSERT', '11.END';
+    -- 11.END ---------------------------------------------------------------------------------------------------
+    
+    -- 12.START -------------------------------------------------------------------------------------------------
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(12)M4S_O402060 공급 계획 문제리스트 테이블 INSERT', '12.START';
+    
+    /*
+    -- 공급계획 문제 리스트 
+    INSERT INTO M4S_O402060
+    (
+        PROJECT_CD
+        ,FP_VRSN_ID
+        ,FP_VRSN_SEQ
+        ,DP_KEY
+        ,FP_KEY
+        ,TIME_INDEX             
+        ,PLAN_YYMMDD
+        ,PLAN_YY
+        ,PLAN_MM
+        ,ENG_ITEM_CD
+        ,ITEM_CD
+        ,PLANT_CD
+        ,PROBLEM_ID
+        ,PROBLEM_CD
+        ,PROBLEM_DESC
+        ,PROBLEM_QTY
+        ,CREATE_USER_CD
+        ,CREATE_DATE
+    )
+    SELECT T1.PROJECT_CD
+          ,T1.FP_VRSN_ID
+          ,T1.FP_VRSN_SEQ
+          ,T1.DP_KEY
+          ,T1.FP_KEY
+          ,T1.TIME_INDEX             
+          ,T3.YYMMDD AS PLAN_YYMMDD
+          ,T3.YY    AS PLAN_YY
+          ,SUBSTRING(T3.YYMM,LEN(T3.YYMM)-1, 2) AS PLAN_MM
+          ,T1.ENG_ITEM_CD
+          ,SUBSTRING(T1.ENG_ITEM_CD,1,CHARINDEX('@', T1.ENG_ITEM_CD)-1)
+          ,SUBSTRING(T1.PROBLEM_CD,LEN(T1.PROBLEM_CD) - CHARINDEX('@',REVERSE(T1.PROBLEM_CD)) + 2, CHARINDEX('@',REVERSE(T1.PROBLEM_CD)) - 1) AS PLANT_CD
+          ,T1.PROBLEM_ID
+          ,SUBSTRING(T1.PROBLEM_CD,1,CHARINDEX('@', T1.PROBLEM_CD)-1) AS PROBLEM_CD
+          ,T1.PROBLEM_DESC
+          ,T1.PROBLEM_QTY
+          , @P_USER_CD AS CREATE_USER_CD
+          ,GETDATE() AS CREATE_DATE
+    FROM M4S_O402060 T1 --문제 리스트
+    INNER JOIN M4E_I401050 T2 --FP CAL
+    ON T1.TIME_INDEX        = T2.TIME_INDEX
+    AND T1.PROJECT_CD       = T2.PROJECT_CD
+    AND T1.FP_VRSN_ID       = T2.FP_VRSN_ID
+    AND T1.FP_VRSN_SEQ      = T2.FP_VRSN_SEQ
+    INNER JOIN M4S_I002030 T3-- CAL
+    ON T1.PROJECT_CD        = T3.PROJECT_CD
+    AND T2.START_YYMMDD     = T3.YYMMDD
+    WHERE T1.PROJECT_CD     = @P_PROJECT_CD
+      AND T1.FP_VRSN_ID     = @V_FP_VRSN_ID 
+      AND T1.FP_VRSN_SEQ    = @V_FP_VRSN_SEQ
+    ;   
+    */
+
+    exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, '(12)M4S_O402060 공급 계획 문제리스트 테이블 INSERT', '12.END';
+    -- 12.END ---------------------------------------------------------------------------------------------------
+    
+    DECLARE @result INT
+	
+	SET @result = 0 -- 0:성공
+
+	IF @@ERROR != 0 SET @result = @@ERROR
+	 
+	--SELECT @result
+
+	IF(@result <> 0) BEGIN
+		--RETURN(1); -- 
+		SELECT @O = 'ERROR' ;
+		ROLLBACK;
+		
+		SET @STR = @V_PROC_NM + '(' + @V_PARAMETER + ') ERROR : ' + ERROR_MESSAGE();
+	        exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, @STR, 'ERROR';
+	        --COMMIT;
+	END
+	ELSE BEGIN
+		--RETURN(2); --
+		SELECT @O = 'SUCCESS';
+		
+		SET @STR = @V_PROC_NM + '(' + @V_PARAMETER + ')';
+		exec dbo.MTX_SCM_PROC_LOG @P_PROJECT_CD, @V_PROC_NM, @STR, 'ALL END';
+    		--COMMIT;
+    	END
+    
+    --COMMIT;
+
+END
+go
+

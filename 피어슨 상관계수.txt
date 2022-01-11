@@ -1,0 +1,106 @@
+/*****************************************************************************
+* DESCRIPTION :	피어슨 상관계수(Pearson correlation coefficient) 참조
+	            ORACLE CORR 함수를 MSSQL버전으로 만듬.(아래 인자 매핑정보)
+
+				SUM(X) X =>	@X_VAL 
+				SUM(Y) Y => @Y_VAL	
+				SUM(X*X) X2 => @X2_VAL
+				SUM(Y*Y) Y2 => @Y2_VAL
+				SUM(X*Y) XY => @XY_VAL
+				COUNT(*) N => @T_CNT
+
+* CREATE DATE : 2021-08-06
+*****************************************************************************/
+CREATE   FUNCTION [dbo].[FN_CORR](@X_VAL FLOAT, @Y_VAL FLOAT, @X2_VAL FLOAT, @Y2_VAL FLOAT, @XY_VAL FLOAT, @T_CNT INT)
+RETURNS FLOAT 
+AS 
+BEGIN 
+	DECLARE @V_RETURN FLOAT; 
+	DECLARE @SUM_X FLOAT;
+	DECLARE @SUM_Y FLOAT;
+	DECLARE @SUM_XX FLOAT;
+	DECLARE @SUM_YY FLOAT;
+	DECLARE @SUM_XY FLOAT;
+	DECLARE @COUNT INT;
+
+	SET @SUM_X = @X_VAL;
+	SET @SUM_Y = @Y_VAL;
+	SET @SUM_XX = @X2_VAL;
+	SET @SUM_YY = @Y2_VAL;
+	SET @SUM_XY = @XY_VAL;
+	SET @COUNT = @T_CNT;
+    IF (@COUNT*@SUM_XX-@SUM_X*@SUM_X) * (@COUNT*@SUM_YY-@SUM_Y*@SUM_Y) = 0
+        SET @V_RETURN = 0;
+    ELSE
+        SET @V_RETURN = ( @COUNT*@SUM_XY - @SUM_X*@SUM_Y ) / SQRT( (@COUNT*@SUM_XX-@SUM_X*@SUM_X) * (@COUNT*@SUM_YY-@SUM_Y*@SUM_Y) );
+
+
+	RETURN @V_RETURN; 
+END
+go
+
+
+-- 이렇게 사용
+SELECT ROUND(DBO.FN_CORR(X1, Y1, X2, Y2, XY, CNT), 3) AS CORR_VAL
+  FROM (
+        SELECT SUM(QTY_SCALING)               AS X1
+             , SUM(VAL_SCALING)               AS Y1
+             , SUM(QTY_SCALING * QTY_SCALING) AS X2
+             , SUM(VAL_SCALING * VAL_SCALING) AS Y2
+             , SUM(QTY_SCALING * VAL_SCALING) AS XY
+             , COUNT(*)                       AS CNT
+          FROM (
+                SELECT PROJECT_CD
+                    , DATA_VRSN_CD
+                    , YYMMDD
+                    , QTY_SCALING
+                 FROM M4S_I002172
+                WHERE 1 = 1
+				  AND DATA_VRSN_CD 		= :VS_CB_DATA_VRSN_CD
+				  AND DIVISION_CD 		= :VS_DIVISION_CD
+				  AND ITEM_ATTR01_CD 	= :VS_CB_BIZ
+				  AND ITEM_ATTR02_CD 	= @:VS_CB_LINE
+				  AND ITEM_ATTR03_CD 	= @:VS_CB_BRAND
+                ) SALES
+          LEFT OUTER JOIN (
+                           SELECT EXG.PROJECT_CD
+                                , EXG.IDX_CD
+                                , EXG.IDX_DTL_CD
+                                , YYMM                                      AS YYMMDD
+                                , CASE WHEN MAX_VAL = MIN_VAL THEN 0
+								       ELSE(REF_VAL - MIN_VAL) / (MAX_VAL - MIN_VAL) END AS VAL_SCALING
+                             FROM (
+									SELECT PROJECT_CD
+										 , IDX_CD
+										 , IDX_DTL_CD
+										 , YYMM
+										 , REF_VAL
+                                     FROM M4S_O110710
+                                    WHERE 1 = 1
+									  AND IDX_CD 	 = :VS_CB_IDX_CD
+									  AND IDX_DTL_CD = :VS_CB_IDX_DTL_CD
+                                  ) EXG
+                             LEFT OUTER JOIN (
+                                              SELECT PROJECT_CD
+                                                   , IDX_CD
+                                                   , IDX_DTL_CD
+                                                   , MIN(REF_VAL) AS MAX_VAL
+                                                   , MAX(REF_VAL) AS MIN_VAL
+                                                FROM M4S_O110710
+                                               WHERE 1 = 1
+												 AND IDX_CD 	= :VS_CB_IDX_CD
+												 AND IDX_DTL_CD = :VS_CB_IDX_DTL_CD
+                                                 AND YYMM BETWEEN (SELECT OPTION_VAL FROM M4S_I001020 WHERE OPTION_CD = 'RST_START_DAY')
+												 		      AND (SELECT OPTION_VAL FROM M4S_I001020 WHERE OPTION_CD = 'RST_END_DAY')
+                                               GROUP BY PROJECT_CD
+                                                      , IDX_CD
+                                                      , IDX_DTL_CD
+                                             ) MM
+                               ON EXG.PROJECT_CD = MM.PROJECT_CD
+                              AND EXG.IDX_CD 	 = MM.IDX_CD
+                              AND EXG.IDX_DTL_CD = MM.IDX_DTL_CD
+                           ) EXG
+            ON SALES.PROJECT_CD = EXG.PROJECT_CD
+           AND SALES.YYMMDD 	= EXG.YYMMDD
+       ) CORR
+

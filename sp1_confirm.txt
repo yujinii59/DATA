@@ -1,0 +1,334 @@
+CREATE              PROCEDURE [dbo].[PRC_SP1_CONFIRM]
+(
+    @V_PROJECT_CD  VARCHAR(50),
+    @V_SP_VRSN_ID  VARCHAR(50),
+    @V_SP1_CD     VARCHAR(50)
+)
+AS
+BEGIN
+
+/* SQLINES DEMO *** ***********************************************************
+    프로시저명 : PRC_SP1_CONFIRM_211206
+    설명 : SP1 CONFRIM
+           각 해당하는 USER의 데이터만 M4S_O201002로 INSERT
+           SP2로 I/F시 기존 SP2의 데이터는 삭제 후 INSERT
+           M4S_O201020 SP 확정테이블 INSERT
+******************************************************************************/
+
+DECLARE @V_PROC_NM  VARCHAR(50);   -- 프로시저이름
+DECLARE @SP_VRSN_ID VARCHAR(50);   -- 판매계획 버전 ID
+DECLARE @SP1_C_CD    VARCHAR(20);   -- SP1_C
+DECLARE @SP2_C_CD    VARCHAR(20);   -- SP2_C
+DECLARE @PROJECT_CD VARCHAR(20);   -- 프로젝트 코드
+DECLARE @RESULT     NUMERIC(2);    --
+DECLARE @ERR        NVARCHAR(MAX); -- 에러메세지
+
+SET NOCOUNT ON;
+
+BEGIN TRY
+    BEGIN TRAN
+        -- 프로시저 이름
+        SET @V_PROC_NM = 'PRC_SP1_CONFIRM_211206';
+        -- 파라메터를 새로운 변수에 담음. (속도문제)
+        SET @SP_VRSN_ID = @V_SP_VRSN_ID;
+        SET @SP2_C_CD = SUBSTRING(@V_SP1_CD,1,2);
+        SET @SP1_C_CD = SUBSTRING(@V_SP1_CD,4,3);
+        SET @PROJECT_CD = @V_PROJECT_CD;
+
+        EXEC dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, 'PRC_SP1_CONFIRM_211206 프로시저', 'ALL START' ;
+        EXEC dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, '(1)M4S_O201002 SP2 DATA DELETE', '1-1.START';
+
+        DELETE
+          FROM M4S_O201002
+         WHERE 1=1
+           AND PROJECT_CD = @PROJECT_CD
+           AND DP_VRSN_ID = @SP_VRSN_ID
+--            AND SUBSTRING(SALES_MGMT_CD,1,2) = @SP2_C_CD
+--            AND SUBSTRING(SALES_MGMT_CD,5,3) = @SP1_C_CD
+        ;
+
+
+
+        EXEC dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, '(1)M4S_O201002 SP2 DATA DELETE', '1-2.END';
+
+        EXEC dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, '(2)M4S_O201002 SP2 DATA INSERT', '2-1.START';
+
+        -- SP1 DATA -> SP2 INSERT
+        INSERT INTO M4S_O201002( PROJECT_CD
+                                ,DP_VRSN_ID
+                                ,SALES_MGMT_CD
+                                ,ITEM_CD
+                                ,USER_CD
+                                ,PLAN_YYMMDD
+                                ,PLAN_WEEK
+                                ,PLAN_PART_WEEK
+                                ,PLAN_YYMM
+                                ,PLAN_YY
+                                ,DP_QTY
+                                ,DP_PRICE
+                                ,CREATE_USER_CD
+                                ,CREATE_DATE )
+        SELECT PLAN_SP1.PROJECT_CD
+              ,PLAN_SP1.DP_VRSN_ID
+              ,PLAN_SP1.SALES_MGMT_CD
+              ,PLAN_SP1.ITEM_CD
+              ,PLAN_SP1.USER_CD
+              ,CAL.YYMMDD
+              ,CAL.WEEK
+              ,CAL.PART_WEEK
+              ,PLAN_SP1.PLAN_YYMM
+              ,PLAN_SP1.PLAN_YY
+              ,PLAN_SP1.DP_QTY
+              ,PLAN_SP1.DP_PRICE
+              ,PLAN_SP1.USER_CD
+              ,GETDATE()
+          FROM (
+                  SELECT PROJECT_CD
+                          ,DP_VRSN_ID
+                          ,SALES_MGMT_CD
+                          ,ITEM_CD
+                          ,USER_CD
+                          ,PLAN_YYMM
+                          ,PLAN_YY
+                          ,SUM(DP_QTY) DP_QTY
+                          ,MAX(DP_PRICE) DP_PRICE
+                      FROM M4S_O201001
+                     WHERE 1=1
+                       AND PROJECT_CD = @PROJECT_CD
+                       AND DP_VRSN_ID = @SP_VRSN_ID
+--                        AND SUBSTRING(SALES_MGMT_CD,1,2) = @SP2_C_CD
+--                        AND SUBSTRING(SALES_MGMT_CD,5,3) = @SP1_C_CD
+                       AND PLAN_YYMMDD >= (SELECT PLAN_FROM_YYMMDD FROM M4S_O201010 WHERE DP_VRSN_ID = @SP_VRSN_ID)
+                     GROUP BY PROJECT_CD
+                          ,DP_VRSN_ID
+                          ,SALES_MGMT_CD
+                          ,ITEM_CD
+                          ,USER_CD
+                          ,PLAN_YYMM
+                          ,PLAN_YY
+                          ,USER_CD
+                ) PLAN_SP1
+            JOIN (
+                    SELECT PROJECT_CD
+                        , YYMMDD
+                        , YYMM
+                        , YY
+                        , WEEK
+                        , PART_WEEK
+                    FROM M4S_I002030
+                    WHERE YYMMDD = START_MONTH_DAY
+                ) CAL
+            ON PLAN_SP1.PROJECT_CD = CAL.PROJECT_CD
+            AND PLAN_SP1.PLAN_YYMM = CAL.YYMM
+            AND PLAN_SP1.PLAN_YY = CAL.YY
+         WHERE 1=1
+           AND PLAN_SP1.PROJECT_CD = @PROJECT_CD
+           AND PLAN_SP1.DP_VRSN_ID = @SP_VRSN_ID
+--            AND SUBSTRING(PLAN_SP1.SALES_MGMT_CD,1,2) = @SP2_C_CD
+--            AND SUBSTRING(PLAN_SP1.SALES_MGMT_CD,5,3) = @SP1_C_CD
+
+           ;
+
+
+        -- 추가적으로 2 달 더 구현
+        INSERT INTO M4S_O201002( PROJECT_CD
+                                ,DP_VRSN_ID
+                                ,SALES_MGMT_CD
+                                ,ITEM_CD
+                                ,USER_CD
+                                ,PLAN_YYMMDD
+                                ,PLAN_WEEK
+                                ,PLAN_PART_WEEK
+                                ,PLAN_YYMM
+                                ,PLAN_YY
+                                ,DP_QTY
+                                ,DP_PRICE
+                                ,CREATE_USER_CD
+                                ,CREATE_DATE )
+        SELECT SMC.PROJECT_CD
+             , @SP_VRSN_ID
+             , SMC.SALES_MGMT_CD
+             , SMC.ITEM_CD
+             , SMC.USER_CD
+             , CAL.YYMMDD
+             , CAL.WEEK
+             , CAL.PART_WEEK
+             , CAL.YYMM
+             , CAL.YY
+             , 0
+             , PLAN_SP1.DP_PRICE
+             , SMC.USER_CD MODIFY_USER_CD
+             , GETDATE()
+        FROM M4S_I204050 SMC
+            JOIN (SELECT CAL.PROJECT_CD
+                                , YYMMDD
+                                , YYMM
+                                , YY
+                                , WEEK
+                                , PART_WEEK
+                            FROM M4S_I002030 CAL
+                                , (SELECT PLAN_FROM_YYMMDD FROM M4S_O201010 WHERE DP_VRSN_ID = @SP_VRSN_ID) START_DAY
+                            WHERE YYMMDD = START_MONTH_DAY
+                              AND YYMM BETWEEN FORMAT(DATEADD(MONTH, 1,DATEADD(WEEK, 3, CONVERT(DATE, START_DAY.PLAN_FROM_YYMMDD))),'yyyyMM') AND FORMAT(DATEADD(MONTH, 2,DATEADD(WEEK, 3, CONVERT(DATE, START_DAY.PLAN_FROM_YYMMDD))),'yyyyMM')
+                        ) CAL
+            ON SMC.PROJECT_CD = CAL.PROJECT_CD
+            JOIN (
+                      SELECT PROJECT_CD
+                              ,DP_VRSN_ID
+                              ,SALES_MGMT_CD
+                              ,ITEM_CD
+                              ,USER_CD
+                              ,MAX(DP_PRICE) DP_PRICE
+                          FROM M4S_O201001
+                         WHERE 1=1
+                           AND PROJECT_CD = @PROJECT_CD
+                           AND DP_VRSN_ID = @SP_VRSN_ID
+--                            AND SUBSTRING(SALES_MGMT_CD,1,2) = @SP2_C_CD
+--                            AND SUBSTRING(SALES_MGMT_CD,5,3) = @SP1_C_CD
+                           AND PLAN_YYMMDD >= (SELECT PLAN_FROM_YYMMDD FROM M4S_O201010 WHERE DP_VRSN_ID = @SP_VRSN_ID)
+                         GROUP BY PROJECT_CD
+                              ,DP_VRSN_ID
+                              ,SALES_MGMT_CD
+                              ,ITEM_CD
+                              ,USER_CD
+                    ) PLAN_SP1
+            ON SMC.PROJECT_CD = PLAN_SP1.PROJECT_CD
+            AND SMC.SALES_MGMT_CD = PLAN_SP1.SALES_MGMT_CD
+            AND SMC.ITEM_CD = PLAN_SP1.ITEM_CD
+            AND SMC.USER_CD = PLAN_SP1.USER_CD
+        WHERE SMC.PROJECT_CD = @PROJECT_CD
+          AND SMC.SALES_MGMT_VRSN_ID = (SELECT SALES_MGMT_VRSN_ID FROM M4S_O201010 WHERE DP_VRSN_ID = @SP_VRSN_ID)
+--           AND SUBSTRING(SMC.SALES_MGMT_CD,1,2) = @SP2_C_CD
+--           AND SUBSTRING(SMC.SALES_MGMT_CD,5,3) = @SP1_C_CD
+        ;
+
+
+        EXEC dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, '(2)M4S_O201002 SP2 DATA INSERT', '2-2.END';
+
+        EXEC dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, '(3)M4S_O201020 SP1 CONFIRM INSERT', '3-1.START';
+
+        -- SP1확정테이블 MERGE
+        MERGE INTO M4S_O201020 T1
+        USING (SELECT T1.PROJECT_CD
+                     ,T1.SALES_MGMT_VRSN_ID
+                     ,T3.SALES_MGMT_TYPE_CD
+                     ,T1.SALES_MGMT_CD
+                     ,T1.USER_CD
+                 FROM M4S_I204050 T1
+                     ,M4S_O201010 T2
+                     ,M4S_I204030 T3
+                WHERE 1=1
+                  AND T2.PROJECT_CD = @PROJECT_CD
+                  AND T1.SALES_MGMT_VRSN_ID = T2.SALES_MGMT_VRSN_ID
+                  AND T2.DP_VRSN_ID = @SP_VRSN_ID
+--                   AND SUBSTRING(T1.SALES_MGMT_CD,1,2) = @SP2_C_CD
+--                   AND SUBSTRING(T1.SALES_MGMT_CD,5,3) = @SP1_C_CD
+                  AND T1.PROJECT_CD = T3.PROJECT_CD
+                  AND T1.PROJECT_CD = T2.PROJECT_CD
+                  AND T1.SALES_MGMT_VRSN_ID = T3.SALES_MGMT_VRSN_ID
+                  AND T1.SALES_MGMT_CD = T3.SALES_MGMT_CD
+                GROUP BY T1.PROJECT_CD
+                        ,T1.SALES_MGMT_VRSN_ID
+                        ,T3.SALES_MGMT_TYPE_CD
+                        ,T1.SALES_MGMT_CD
+                        ,T1.USER_CD) T2
+        ON  T1.PROJECT_CD = T2.PROJECT_CD
+        AND T1.SALES_MGMT_TYPE_CD = T2.SALES_MGMT_TYPE_CD
+        AND T1.SALES_MGMT_CD      = T2.SALES_MGMT_CD
+        AND T1.USER_CD            = T2.USER_CD
+        WHEN MATCHED THEN
+        UPDATE
+           SET CONF_CD = 'CONFIRM'
+              ,CONF_USER_CD = T2.USER_CD
+              ,CONF_YYMMDD = CONVERT(VARCHAR(8),GETDATE(),112)
+        WHEN NOT MATCHED THEN
+        INSERT (PROJECT_CD
+               ,DP_VRSN_ID
+               ,SALES_MGMT_CD
+               ,SALES_MGMT_TYPE_CD
+               ,USER_CD
+               ,CONF_CD
+               ,CONF_USER_CD
+               ,CONF_YYMMDD)
+        VALUES (T2.PROJECT_CD
+               ,@SP_VRSN_ID
+               ,T2.SALES_MGMT_CD
+               ,T2.SALES_MGMT_TYPE_CD
+               ,T2.USER_CD
+               ,'CONFIRM'
+               ,T2.USER_CD
+               ,CONVERT(VARCHAR(8),GETDATE(),112));
+
+
+        -- SP1_C 확정 MERGE  211122 iyj
+        MERGE INTO M4S_O201020 T1
+        USING (SELECT T1.PROJECT_CD
+                     ,T1.SALES_MGMT_VRSN_ID
+                     ,T3.SALES_MGMT_TYPE_CD
+                     ,T1.LINK_SALES_MGMT_CD
+                     ,T1.USER_CD
+                 FROM M4S_I204040 T1
+                     ,M4S_O201010 T2
+                     ,M4S_I204030 T3
+                WHERE 1=1
+                  AND T2.PROJECT_CD = @PROJECT_CD
+                  AND T1.SALES_MGMT_VRSN_ID = T2.SALES_MGMT_VRSN_ID
+                  AND T2.DP_VRSN_ID = @SP_VRSN_ID
+--                   AND SUBSTRING(T1.LINK_SALES_MGMT_CD,5,3) = @SP1_C_CD
+                  AND T3.SALES_MGMT_TYPE_CD = 'SP1_C'
+                  AND T1.PROJECT_CD = T3.PROJECT_CD
+                  AND T1.PROJECT_CD = T2.PROJECT_CD
+                  AND T1.SALES_MGMT_VRSN_ID = T3.SALES_MGMT_VRSN_ID
+                  AND T1.LINK_SALES_MGMT_CD = T3.SALES_MGMT_CD
+                GROUP BY T1.PROJECT_CD
+                        ,T1.SALES_MGMT_VRSN_ID
+                        ,T3.SALES_MGMT_TYPE_CD
+                        ,T1.LINK_SALES_MGMT_CD
+                        ,T1.USER_CD) T2
+        ON  T1.PROJECT_CD = T2.PROJECT_CD
+        AND T1.SALES_MGMT_TYPE_CD = T2.SALES_MGMT_TYPE_CD
+        AND T1.SALES_MGMT_CD      = T2.LINK_SALES_MGMT_CD
+        AND T1.USER_CD            = T2.USER_CD
+        WHEN MATCHED THEN
+        UPDATE
+           SET CONF_CD = 'CONFIRM'
+              ,CONF_USER_CD = T2.USER_CD
+              ,CONF_YYMMDD = CONVERT(VARCHAR(8),GETDATE(),112)
+        WHEN NOT MATCHED THEN
+        INSERT (PROJECT_CD
+               ,DP_VRSN_ID
+               ,SALES_MGMT_CD
+               ,SALES_MGMT_TYPE_CD
+               ,USER_CD
+               ,CONF_CD
+               ,CONF_USER_CD
+               ,CONF_YYMMDD)
+        VALUES (T2.PROJECT_CD
+               ,@SP_VRSN_ID
+               ,T2.LINK_SALES_MGMT_CD
+               ,T2.SALES_MGMT_TYPE_CD
+               ,T2.USER_CD
+               ,'CONFIRM'
+               ,T2.USER_CD
+               ,CONVERT(VARCHAR(8),GETDATE(),112));
+
+        EXEC dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, '(3)M4S_O201020 SP1 CONFIRM INSERT', '3-2.END';
+        COMMIT TRAN;
+        --SELECT '1' AS RESULT;
+        Set @RESULT = (SELECT '1' AS RESULT);
+        EXEC  dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, 'PRC_SP1_CONFIRM 프로시저', 'ALL END';
+
+    END TRY
+    BEGIN CATCH
+
+        ROLLBACK TRAN;
+        --SELECT '1' AS RESULT;
+        Set @RESULT = (SELECT '0' AS RESULT);
+        SET @ERR = 'Error : ' + ERROR_MESSAGE();
+        EXEC  dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, @ERR, 'ERROR';
+
+    END CATCH
+
+END ;
+go
+

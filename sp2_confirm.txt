@@ -1,0 +1,160 @@
+CREATE     PROCEDURE [dbo].[PRC_SP2_CONFIRM]
+(
+    @V_PROJECT_CD  VARCHAR(50),
+    @V_SP_VRSN_ID  VARCHAR(50),
+    @V_SP2_CD     VARCHAR(50)
+)
+AS
+BEGIN
+
+/* SQLINES DEMO *** ***********************************************************
+    프로시저명 : PRC_SP2_CONFIRM
+    설명 : SP2 CONFRIM
+           M4S_O201020 SP 확정테이블 INSERT
+******************************************************************************/
+
+DECLARE @V_PROC_NM  VARCHAR(50);   -- 프로시저이름
+DECLARE @SP_VRSN_ID VARCHAR(50);   -- 판매계획 버전 ID 
+DECLARE @SP2_CD    VARCHAR(20);   -- SP2 담당자
+DECLARE @PROJECT_CD VARCHAR(20);   -- 프로젝트 코드
+DECLARE @RESULT     NUMERIC(2);    -- 
+DECLARE @ERR        NVARCHAR(MAX); -- 에러메세지
+ 
+SET NOCOUNT ON;
+
+BEGIN TRY
+    BEGIN TRAN
+        -- 프로시저 이름
+        SET @V_PROC_NM = 'PRC_SP2_CONFIRM';
+        -- 파라메터를 새로운 변수에 담음. (속도문제)
+        SET @SP_VRSN_ID = @V_SP_VRSN_ID;
+        SET @SP2_CD = @V_SP2_CD;
+        SET @PROJECT_CD = @V_PROJECT_CD;
+
+        EXEC dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, 'PRC_SP2_CONFIRM 프로시저', 'ALL START' ;
+
+        EXEC dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, '(1)M4S_O201020 SP2 CONFIRM INSERT', '1-1.START';
+
+        -- SP2확정테이블 MERGE
+        MERGE INTO M4S_O201020 T1
+        USING (SELECT T1.PROJECT_CD
+                     ,T1.SALES_MGMT_VRSN_ID
+                     ,T3.SALES_MGMT_TYPE_CD
+                     ,T1.SALES_MGMT_CD
+                     ,T1.USER_CD
+                 FROM M4S_I204050 T1
+                     ,M4S_O201010 T2
+                     ,M4S_I204030 T3
+                WHERE 1=1
+                  AND T2.PROJECT_CD = @PROJECT_CD
+                  AND T1.SALES_MGMT_VRSN_ID = T2.SALES_MGMT_VRSN_ID
+                  AND T2.DP_VRSN_ID = @SP_VRSN_ID
+                  AND T1.SALES_MGMT_CD LIKE @SP2_CD + '%'
+                  AND T1.PROJECT_CD = T3.PROJECT_CD
+                  AND T1.PROJECT_CD = T2.PROJECT_CD
+                  AND T1.SALES_MGMT_VRSN_ID = T3.SALES_MGMT_VRSN_ID
+                  AND T1.SALES_MGMT_CD = T3.SALES_MGMT_CD
+                GROUP BY T1.PROJECT_CD
+                        ,T1.SALES_MGMT_VRSN_ID
+                        ,T3.SALES_MGMT_TYPE_CD
+                        ,T1.SALES_MGMT_CD
+                        ,T1.USER_CD) T2
+        ON  T1.PROJECT_CD = T2.PROJECT_CD
+        AND T1.SALES_MGMT_TYPE_CD = T2.SALES_MGMT_TYPE_CD
+        AND T1.SALES_MGMT_CD      = T2.SALES_MGMT_CD
+        AND T1.USER_CD            = T2.USER_CD
+        WHEN MATCHED THEN 
+        UPDATE
+           SET CONF_CD = 'CONFIRM'
+              ,CONF_USER_CD = T2.USER_CD
+              ,CONF_YYMMDD = CONVERT(VARCHAR(8),GETDATE(),112)
+        WHEN NOT MATCHED THEN
+        INSERT (PROJECT_CD
+               ,DP_VRSN_ID
+               ,SALES_MGMT_CD
+               ,SALES_MGMT_TYPE_CD
+               ,USER_CD
+               ,CONF_CD
+               ,CONF_USER_CD
+               ,CONF_YYMMDD)
+        VALUES (T2.PROJECT_CD
+               ,@SP_VRSN_ID
+               ,T2.SALES_MGMT_CD
+               ,T2.SALES_MGMT_TYPE_CD
+               ,T2.USER_CD
+               ,'CONFIRM'
+               ,T2.USER_CD
+               ,CONVERT(VARCHAR(8),GETDATE(),112));
+            
+
+        -- SP2_C 확정 MERGE  211122 iyj
+        MERGE INTO M4S_O201020 T1
+        USING (SELECT T1.PROJECT_CD
+                     ,T1.SALES_MGMT_VRSN_ID
+                     ,T3.SALES_MGMT_TYPE_CD
+                     ,T1.LINK_SALES_MGMT_CD
+                     ,T1.USER_CD
+                 FROM M4S_I204040 T1
+                     ,M4S_O201010 T2
+                     ,M4S_I204030 T3
+                WHERE 1=1
+                  AND T2.PROJECT_CD = @PROJECT_CD
+                  AND T1.SALES_MGMT_VRSN_ID = T2.SALES_MGMT_VRSN_ID
+                  AND T2.DP_VRSN_ID = @SP_VRSN_ID
+                  AND T1.LINK_SALES_MGMT_CD = @SP2_CD
+                  AND T1.PROJECT_CD = T3.PROJECT_CD
+                  AND T1.PROJECT_CD = T2.PROJECT_CD
+                  AND T1.SALES_MGMT_VRSN_ID = T3.SALES_MGMT_VRSN_ID
+                  AND T1.LINK_SALES_MGMT_CD = T3.SALES_MGMT_CD
+                GROUP BY T1.PROJECT_CD
+                        ,T1.SALES_MGMT_VRSN_ID
+                        ,T3.SALES_MGMT_TYPE_CD
+                        ,T1.LINK_SALES_MGMT_CD
+                        ,T1.USER_CD) T2
+        ON  T1.PROJECT_CD = T2.PROJECT_CD
+        AND T1.SALES_MGMT_TYPE_CD = T2.SALES_MGMT_TYPE_CD
+        AND T1.SALES_MGMT_CD      = T2.LINK_SALES_MGMT_CD
+        AND T1.USER_CD            = T2.USER_CD
+        WHEN MATCHED THEN 
+        UPDATE
+           SET CONF_CD = 'CONFIRM'
+              ,CONF_USER_CD = T2.USER_CD
+              ,CONF_YYMMDD = CONVERT(VARCHAR(8),GETDATE(),112)
+        WHEN NOT MATCHED THEN
+        INSERT (PROJECT_CD
+               ,DP_VRSN_ID
+               ,SALES_MGMT_CD
+               ,SALES_MGMT_TYPE_CD
+               ,USER_CD
+               ,CONF_CD
+               ,CONF_USER_CD
+               ,CONF_YYMMDD)
+        VALUES (T2.PROJECT_CD
+               ,@SP_VRSN_ID
+               ,T2.LINK_SALES_MGMT_CD
+               ,T2.SALES_MGMT_TYPE_CD
+               ,T2.USER_CD
+               ,'CONFIRM'
+               ,T2.USER_CD
+               ,CONVERT(VARCHAR(8),GETDATE(),112));
+
+        EXEC dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, '(1)M4S_O201020 SP2 CONFIRM INSERT', '1-2.END';
+        COMMIT TRAN;
+        --SELECT '1' AS RESULT;
+        Set @RESULT = (SELECT '1' AS RESULT);
+        EXEC  dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, 'PRC_SP2_CONFIRM 프로시저', 'ALL END';
+
+    END TRY
+    BEGIN CATCH
+
+        ROLLBACK TRAN;
+        --SELECT '1' AS RESULT;
+        Set @RESULT = (SELECT '0' AS RESULT);
+        SET @ERR = 'Error : ' + ERROR_MESSAGE();
+        EXEC  dbo.MTX_SCM_PROC_LOG @V_PROJECT_CD, @V_PROC_NM, @ERR, 'ERROR';
+
+    END CATCH
+    
+END ;
+go
+
